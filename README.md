@@ -157,10 +157,14 @@ Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a te
 
 Docker **não** é necessário.
 
+### Download
+
+⬇️ **[Baixar a versão mais recente](https://github.com/GuilhermeFusari/mcp-research-agent/releases/latest)**: em *Assets*, clique em **Source code (zip)**.
+
 ### Passos
 
-1. Clone ou baixe este repositório para um lugar fixo (ex.: `C:\Projetos\mcp-research-agent`). **Não mova depois**: o Claude Desktop guarda o caminho.
-2. Dê **duplo clique em `instalar.bat`**. A primeira vez leva ~10 minutos (~1,5 GB entre bibliotecas e modelo).
+1. Extraia o zip num lugar fixo (ex.: `C:\Projetos\mcp-research-agent`). **Não mova depois**: o Claude Desktop guarda o caminho.
+2. Dê **duplo clique em `instalar.bat`**. Se o Windows mostrar *"O Windows protegeu o computador"* (acontece com qualquer script baixado da internet), clique em **Mais informações → Executar assim mesmo**. A primeira vez leva ~10 minutos (~1,5 GB entre bibliotecas e modelo).
 3. Reinicie o Claude Desktop pelo **ícone da bandeja** (perto do relógio) → Sair, e abra de novo.
 
 O instalador é idempotente (pode ser rodado de novo) e executa:
