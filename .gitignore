@@ -1,0 +1,21 @@
+# Coisas que NUNCA devem ir para o Git (ou para seus amigos).
+# (No .gitignore, comentário só funciona em linha própria.)
+
+# Ambiente virtual: cada um cria o seu
+.venv/
+__pycache__/
+
+# Banco vetorial: contém trechos dos SEUS PDFs
+qdrant_data/
+
+# Auditoria: revela o que você pesquisou
+logs/
+
+# Aceite do aviso de privacidade é por pessoa
+.aviso_aceito
+
+# Config pessoal (tem os SEUS caminhos). O modelo é o config.exemplo.toml.
+config.toml
+
+# Executável do Qdrant (baixado pelo instalador, 85 MB)
+bin/

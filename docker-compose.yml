@@ -1,0 +1,25 @@
+# Sobe o Qdrant (banco vetorial) num container Docker.
+# Uso:  docker compose up -d     (sobe em segundo plano)
+#       docker compose down      (para; os dados continuam em ./qdrant_data)
+
+services:
+  qdrant:
+    # Versão fixa (e não "latest"): todo mundo que rodar este projeto, inclusive
+    # seus amigos, usa exatamente a mesma versão. Atualizar vira uma decisão
+    # consciente, não uma surpresa.
+    image: qdrant/qdrant:v1.19.1
+    container_name: agente-qdrant
+
+    # "127.0.0.1:" faz a porta ficar acessível SÓ deste PC. Sem isso, qualquer
+    # máquina da sua rede Wi-Fi poderia ler o banco (e os trechos dos seus PDFs).
+    ports:
+      - "127.0.0.1:6333:6333"   # API REST + painel web (/dashboard)
+      - "127.0.0.1:6334:6334"   # API gRPC (mais rápida, usada pelo cliente Python se pedirmos)
+
+    # Volume: os dados ficam numa pasta do projeto, fora do container.
+    # Assim apagar/atualizar o container não apaga o índice.
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+
+    # Volta a subir sozinho quando o Docker Desktop iniciar.
+    restart: unless-stopped
