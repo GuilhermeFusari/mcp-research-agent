@@ -1,24 +1,15 @@
-# Configuração do agente de pesquisa.
-# TOML é um formato de config legível; o Python lê nativamente (tomllib).
-#
-# ESTE É O MODELO. O instalar.ps1 copia para config.toml (o arquivo que o
-# programa usa de verdade), que é pessoal e não vai para o Git.
-# POR QUE UM ARQUIVO DE CONFIG? Cada pessoa (você, seus amigos) ajusta pastas
-# e opções aqui, sem mexer no código.
+# Modelo de configuração. O instalar.ps1 copia para config.toml (pessoal, fora do Git).
 
 [indexacao]
-# ALLOWLIST: só estas pastas (e subpastas) são indexadas. Nada fora daqui.
-# "~" = sua pasta de usuário. O instalar.ps1 troca pelos caminhos reais
-# (inclusive quando a Área de Trabalho está dentro do OneDrive).
+# Só estas pastas (e subpastas) são indexadas. "~" = pasta do usuário;
+# o instalador troca pelos caminhos reais (inclusive OneDrive).
 pastas = [
     '~\Desktop',
     '~\Downloads',
     '~\Documents',
 ]
 
-# Qualquer PDF cujo caminho contenha um destes termos é IGNORADO
-# (sem diferenciar maiúsculas/minúsculas). Protege documentos pessoais
-# que costumam ficar misturados em Downloads.
+# PDFs cujo caminho contém um destes termos são ignorados (sem diferenciar maiúsculas).
 excluir_se_contem = [
     "boleto", "fatura", "nota fiscal", "nf-e", "extrato", "comprovante",
     "contrato", "holerite", "contracheque", "imposto", "irpf", "cpf", " rg",
@@ -26,50 +17,41 @@ excluir_se_contem = [
 ]
 
 [chunking]
-# Tamanho de cada pedaço (em caracteres) e quanto um pedaço repete do anterior.
-# A sobreposição evita que uma ideia seja cortada ao meio entre dois chunks.
+# Em caracteres. Mudou? Rode: python indexar.py --reindexar
 tamanho = 1000
 sobreposicao = 200
 
 [embeddings]
-# Modelo multilíngue (PT + EN no mesmo espaço vetorial), roda local.
 modelo = "intfloat/multilingual-e5-base"
 
 [qdrant]
-# "executavel": o programa liga o bin/qdrant.exe sozinho, em segundo plano
-#               (baixado pelo instalador). Não precisa de Docker.
-# "docker":     você sobe o Qdrant com "docker compose up -d".
+# "executavel": o programa inicia o bin/qdrant.exe sozinho (sem Docker).
+# "docker":     o Qdrant roda via "docker compose up -d".
 modo = "executavel"
-# 127.0.0.1 e não "localhost": no Windows, "localhost" tenta IPv6 primeiro
-# e cada conexão perde ~2 s até cair no IPv4, onde o Qdrant escuta.
+# Use 127.0.0.1, não "localhost" (no Windows, localhost adiciona ~2 s por conexão).
 url = "http://127.0.0.1:6333"
 colecao = "pdfs"
 
 [seguranca]
-# Mudou algo aqui? Reinicie o servidor (não precisa reindexar).
+# Mudanças aqui valem após reiniciar o Claude Desktop (não precisa reindexar).
 
-# CLASSIFICAÇÃO. Níveis: "publico" < "interno" < "confidencial".
-# Cada PDF recebe um nível pelo caminho; só vai para o Claude o que for
-# <= nivel_maximo_enviado.
+# Níveis: "publico" < "interno" < "confidencial". Só é enviado ao Claude o que
+# for <= nivel_maximo_enviado.
 nivel_padrao = "interno"
 nivel_maximo_enviado = "interno"
-# Caminho contém algum destes -> confidencial (nunca enviado).
 confidencial_se_contem = ["confidencial", "sigiloso", "nda", "privado"]
-# Caminho contém algum destes -> público.
 publico_se_contem = []
 
-# MASCARAMENTO: troca CPF, CNPJ, e-mail, telefone e cartão por [CPF], [EMAIL]...
+# Troca CPF, CNPJ, e-mail, telefone e cartão por [CPF], [EMAIL] etc.
 mascarar_dados_pessoais = true
 
-# AUDITORIA: registra cada chamada em logs/auditoria.jsonl.
+# Registra cada chamada em logs/auditoria.jsonl.
 auditoria = true
-# false = guarda só hash e tamanho do que saiu (o log não vira cópia dos dados).
+# false = salva só hash e tamanho do que foi enviado, não o texto.
 auditoria_salvar_texto = false
 
 [ocr]
-# Lê páginas escaneadas (imagem, sem texto) com EasyOCR. Só roda nessas
-# páginas; PDFs normais não ficam mais lentos.
+# Aplicado só em páginas sem texto (escaneadas).
 ativo = true
 idiomas = ["pt", "en"]
-# Resolução da "foto" da página: mais alto = mais preciso e mais lento.
 dpi = 200

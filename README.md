@@ -259,8 +259,6 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 | `registrar_claude.py` | Registra/remove o servidor no config do Claude Desktop |
 | `instalar.ps1` / `.bat` | Instalador |
 | `docker-compose.yml` | Alternativa: Qdrant via Docker |
-| `ESTUDO.md` | Roteiro de estudo com exercícios sobre os conceitos do projeto |
-
 ---
 
 ## Limitações e próximos passos

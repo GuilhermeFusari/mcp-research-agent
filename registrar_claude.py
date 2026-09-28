@@ -1,15 +1,4 @@
-"""
-Registra (ou atualiza) o servidor MCP no Claude Desktop.
-
-    python registrar_claude.py            # registra
-    python registrar_claude.py --remover  # desfaz
-
-POR QUE UM SCRIPT, E NÃO "EDITE O JSON NA MÃO"?
-Editar JSON à mão é a principal fonte de erro de instalação: uma vírgula
-esquecida e o Claude Desktop ignora o arquivo inteiro. O script lê o JSON,
-mexe só na chave "mcpServers" -> "agente-pesquisa", preserva todo o resto
-e faz um backup antes.
-"""
+"""Registra (ou atualiza) o servidor MCP no Claude Desktop."""
 
 import argparse
 import json
@@ -24,21 +13,13 @@ PASTA_PROJETO = Path(__file__).resolve().parent
 
 
 def arquivos_config() -> list[Path]:
-    """Onde o Claude Desktop guarda o config no Windows.
-
-    Instalação normal:        %APPDATA%\\Claude\\claude_desktop_config.json
-    Instalação pela MS Store: uma cópia "virtualizada" em
-        %LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude\\
-    Não dá para saber com certeza qual o app usa, então atualizamos todos
-    os que existirem (é o mesmo conteúdo, não faz mal).
-    """
+    """Onde o Claude Desktop guarda o config no Windows."""
     candidatos = [Path(os.environ["APPDATA"]) / "Claude" / "claude_desktop_config.json"]
     pacotes = Path(os.environ["LOCALAPPDATA"]) / "Packages"
     if pacotes.is_dir():
         candidatos += pacotes.glob("Claude_*/LocalCache/Roaming/Claude/claude_desktop_config.json")
 
     existentes = [c for c in candidatos if c.exists()]
-    # Nenhum existe (Claude nunca foi aberto?): cria o padrão.
     return existentes or candidatos[:1]
 
 
@@ -50,8 +31,6 @@ def atualizar(arquivo: Path, remover: bool) -> None:
             try:
                 config = json.loads(texto)
             except json.JSONDecodeError as e:
-                # Não sobrescrevemos um arquivo que não entendemos: poderia
-                # apagar configurações da pessoa.
                 sys.exit(f"ERRO: {arquivo} não é um JSON válido ({e}). Corrija ou apague e rode de novo.")
         backup = arquivo.with_name(f"{arquivo.name}.{datetime.now():%Y%m%d-%H%M%S}.bak")
         shutil.copy2(arquivo, backup)
@@ -61,8 +40,6 @@ def atualizar(arquivo: Path, remover: bool) -> None:
     if remover:
         servidores.pop(NOME_SERVIDOR, None)
     else:
-        # sys.executable = o python.exe que está rodando este script. Se o
-        # script for chamado pelo python do venv, é o do venv, que é o que queremos.
         servidores[NOME_SERVIDOR] = {
             "command": sys.executable,
             "args": [str(PASTA_PROJETO / "servidor.py")],
@@ -74,7 +51,7 @@ def atualizar(arquivo: Path, remover: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remover", action="store_true", help="remove o servidor do Claude Desktop")
     parser.add_argument("--arquivo", type=Path, help="usa este arquivo em vez de detectar (para testes)")
     args = parser.parse_args()
