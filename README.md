@@ -139,7 +139,7 @@ Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a te
 <summary><b>Detalhes que valem uma nota</b></summary>
 
 - **`127.0.0.1` em vez de `localhost`**: no Windows, `localhost` tenta IPv6 primeiro, e cada conexão perdia ~2,5 s até cair no IPv4. A troca reduziu a busca de 5,8 s para 0,7 s.
-- **Modelo carregado sob demanda**: o servidor sobe em segundos (o Claude Desktop derruba servidores lentos); só a primeira busca paga o carregamento.
+- **Inicialização rápida + pré-carregamento**: bibliotecas pesadas são importadas sob demanda, então o servidor responde ao Claude em ~2 s (servidores lentos são derrubados por timeout). Em seguida, uma thread em segundo plano carrega o modelo, e a primeira busca não espera.
 - **Buscas pesadas em thread** (`asyncio.to_thread`): rodar o modelo usa CPU, então a busca não bloqueia o servidor.
 - **Nunca `print()` no servidor**: o stdout é o canal do protocolo MCP. Logs vão para o stderr.
 - **Instruções diretivas no servidor**: sem elas, o Claude responde de memória sobre temas conhecidos (ex.: p53) e não consulta as ferramentas.
@@ -269,7 +269,6 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 - A busca por sequência é **exata**: sequências parecidas, mas não idênticas, não são encontradas.
 - OCR na CPU é lento (~1 min por página densa); com GPU NVIDIA + PyTorch CUDA fica bem mais rápido (detectado automaticamente).
 - O Claude decide quando usar as ferramentas: as instruções aumentam muito a chance, mas não garantem 100%.
-- A primeira busca de cada sessão leva ~30 s (carrega o modelo e inicia o banco).
 
 **Roadmap**
 
@@ -286,7 +285,7 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 | Sintoma | Solução |
 |---|---|
 | Busca nos PDFs dá erro de conexão | Veja `logs\qdrant.log`; rode o `instalar.bat` de novo |
-| 1ª busca demora ~30 s | Normal: carrega o modelo e inicia o banco. As seguintes levam ~1 s |
+| 1ª busca demora | O modelo é pré-carregado em segundo plano logo que o Claude abre; perguntas feitas nos primeiros segundos podem esperar ele terminar |
 | Indexação parece travada | PDFs escaneados passam por OCR (~1 min/página na CPU); o log mostra a página atual |
 | Ferramentas não aparecem no Claude | Reinicie o Claude pela bandeja; confira em Configurações → Desenvolvedor |
 | "O índice ainda não existe" | Rode `indexar.py` |
