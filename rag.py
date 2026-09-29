@@ -1,14 +1,20 @@
 """Peças compartilhadas do RAG: configuração, modelo de embeddings e conexão com o Qdrant."""
 
+from __future__ import annotations
+
 import logging
 import os
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
-from qdrant_client import QdrantClient  # noqa: E402
+# Importações pesadas ficam dentro das funções: o servidor MCP precisa iniciar
+# rápido (o Claude Desktop tem timeout), e elas só são usadas na 1ª busca.
+if TYPE_CHECKING:
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from qdrant_client import QdrantClient
 
 log = logging.getLogger("agente-pesquisa")
 
@@ -25,6 +31,7 @@ def carregar_config(caminho: Path | str | None = None) -> dict:
 def criar_embeddings(config: dict) -> HuggingFaceEmbeddings:
     """Carrega o modelo de embeddings (baixa na 1ª vez, ~1 GB; depois usa o cache)."""
     import torch
+    from langchain_huggingface import HuggingFaceEmbeddings
 
     dispositivo = "cuda" if torch.cuda.is_available() else "cpu"
     log.info("Embeddings: modelo=%s dispositivo=%s", config["embeddings"]["modelo"], dispositivo)
@@ -40,6 +47,8 @@ def criar_embeddings(config: dict) -> HuggingFaceEmbeddings:
 
 def criar_cliente_qdrant(config: dict) -> QdrantClient:
     """Conecta no Qdrant, ligando o executável antes se for o caso."""
+    from qdrant_client import QdrantClient
+
     garantir_qdrant(config)
     return QdrantClient(url=config["qdrant"]["url"])
 

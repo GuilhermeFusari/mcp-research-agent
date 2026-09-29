@@ -123,5 +123,17 @@ async def listar_pdfs() -> str:
     return saida
 
 
+def _pre_carregar() -> None:
+    """Carrega modelo e banco em segundo plano, para a 1ª busca não esperar ~1 min."""
+    try:
+        busca_pdfs._pronto()
+        log.info("Busca em PDFs pronta (pré-carregada).")
+    except Exception as e:
+        log.info("Pré-carregamento adiado: %s", e)
+
+
 if __name__ == "__main__":
+    import threading
+
+    threading.Thread(target=_pre_carregar, daemon=True).start()
     mcp.run(transport="stdio")

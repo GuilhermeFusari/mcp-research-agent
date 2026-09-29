@@ -3,9 +3,6 @@
 import logging
 from functools import lru_cache
 
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import models
-
 import rag
 import seguranca
 
@@ -47,6 +44,8 @@ def _recursos():
     if not existe:
         raise ErroBusca("O índice de PDFs ainda não existe. Rode primeiro: python indexar.py")
 
+    from langchain_qdrant import QdrantVectorStore
+
     store = QdrantVectorStore(
         client=client, collection_name=colecao, embedding=rag.criar_embeddings(config)
     )
@@ -55,6 +54,8 @@ def _recursos():
 
 def buscar(pergunta: str, k: int = 5, arquivo: str | None = None) -> tuple[str, dict]:
     """Devolve os k trechos mais parecidos (em significado) com a pergunta."""
+    from qdrant_client import models
+
     client, colecao, store, cfg_seg = _pronto()
     permitidos, bloqueados = _separar_por_classificacao(client, colecao, cfg_seg)
 
