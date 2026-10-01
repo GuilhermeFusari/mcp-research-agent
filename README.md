@@ -125,11 +125,11 @@ flowchart TB
 O [PubTator3](https://www.ncbi.nlm.nih.gov/research/pubtator3/) é um serviço do NCBI que passou modelos de IA por todo o PubMed e marcou, em cada artigo, os genes, doenças, químicos, variantes e espécies citados, já normalizados ("Dox", "doxorubicin" e "Doxorubicin" viram a mesma entidade). A partir dessas marcações, ele também extraiu relações ("X trata Y", "X inibe Y") e contou em quantos artigos cada uma aparece.
 
 ```mermaid
-flowchart LR
+flowchart TB
     N["Nome<br/>'p53'"] -->|buscar_entidade| ID["ID normalizado<br/>@GENE_TP53"]
     ID -->|buscar_artigos| L["Lista de artigos<br/>PMID · ano · revista · título"]
     L -->|"ler_artigo (PMID)"| A["Resumo ou resultados + discussão<br/>+ entidades citadas"]
-    ID -->|buscar_relacoes| R["Relações com nº de artigos<br/>ex.: doxorrubicina —trata→ câncer de mama (6.414)"]
+    ID -->|buscar_relacoes| R["Relações com nº de artigos<br/>ex.: doxorrubicina —trata→<br/>câncer de mama (6.414)"]
     R -->|"buscar_artigos ('relations:...')"| L
 ```
 
