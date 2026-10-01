@@ -6,12 +6,17 @@ Servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) que dá
 - 📰 **Literatura científica**: busca e lê artigos do PubMed pelo [PubTator3](https://www.ncbi.nlm.nih.gov/research/pubtator3/) (NCBI/NIH), com genes, doenças e químicos já anotados, e consulta relações extraídas de toda a literatura (ex.: que doenças um fármaco trata), citando PMIDs.
 - 📚 **Biblioteca pessoal de PDFs**: busca semântica (RAG) nos PDFs do seu computador, **em português e inglês**, inclusive PDFs escaneados (OCR), com citação de arquivo e página.
 
-Tudo roda localmente no Windows: os PDFs, o índice vetorial e o modelo de embeddings nunca saem da máquina. Só os trechos relevantes de cada busca vão para o Claude, e passam por uma camada de segurança antes disso.
+Roda no Windows. Os PDFs, o índice vetorial e o modelo de embeddings nunca saem da máquina: só os trechos relevantes de cada busca vão para o Claude, e passam por uma camada de segurança antes disso. As consultas de proteínas e de literatura vão para as APIs públicas do UniProt e do NCBI, levando apenas o termo pesquisado.
 
 ```
 Você:   O que meus artigos dizem sobre como peptídeos antimicrobianos matam bactérias?
 Claude: [usa buscar_pdfs] Segundo review_amp.pdf (p. 4), eles se ligam por interação
         eletrostática aos fosfolipídios negativos da membrana e formam poros...
+
+Você:   Quais doenças a doxorrubicina trata, segundo a literatura?
+Claude: [usa buscar_entidade e buscar_relacoes] A relação mais sustentada é com
+        neoplasias em geral (~14.900 artigos), seguida de câncer de mama (~6.400),
+        carcinoma hepatocelular (~1.650) e osteossarcoma (~1.130)...
 ```
 
 ---
@@ -21,6 +26,7 @@ Claude: [usa buscar_pdfs] Segundo review_amp.pdf (p. 4), eles se ligam por inter
 - [Funcionalidades](#funcionalidades)
 - [Arquitetura](#arquitetura)
 - [Como funciona o RAG](#como-funciona-o-rag)
+- [Como funciona a busca na literatura](#como-funciona-a-busca-na-literatura)
 - [Segurança e privacidade](#segurança-e-privacidade)
 - [Decisões técnicas e trade-offs](#decisões-técnicas-e-trade-offs)
 - [Instalação](#instalação)
@@ -114,6 +120,26 @@ flowchart TB
 
 ---
 
+## Como funciona a busca na literatura
+
+O [PubTator3](https://www.ncbi.nlm.nih.gov/research/pubtator3/) é um serviço do NCBI que passou modelos de IA por todo o PubMed e marcou, em cada artigo, os genes, doenças, químicos, variantes e espécies citados, já normalizados ("Dox", "doxorubicin" e "Doxorubicin" viram a mesma entidade). A partir dessas marcações, ele também extraiu relações ("X trata Y", "X inibe Y") e contou em quantos artigos cada uma aparece.
+
+```mermaid
+flowchart LR
+    N["Nome<br/>'p53'"] -->|buscar_entidade| ID["ID normalizado<br/>@GENE_TP53"]
+    ID -->|buscar_artigos| L["Lista de artigos<br/>PMID · ano · revista · título"]
+    L -->|"ler_artigo (PMID)"| A["Resumo ou resultados + discussão<br/>+ entidades citadas"]
+    ID -->|buscar_relacoes| R["Relações com nº de artigos<br/>ex.: doxorrubicina —trata→ câncer de mama (6.414)"]
+    R -->|"buscar_artigos ('relations:...')"| L
+```
+
+1. **Entidade**: o nome vira um ID. Buscar pelo ID encontra todos os sinônimos. Como o autocomplete casa por prefixo, a ferramenta mostra os candidatos e o Claude escolhe o certo pelo contexto da conversa.
+2. **Busca**: devolve só a "ficha" dos artigos, 10 por página, para o Claude escolher o que vale abrir.
+3. **Leitura**: título e resumo por padrão. Com `texto_completo`, inclui resultados e discussão (só para artigos do PMC Open Access) e descarta métodos, tabelas e referências. Termina com as entidades mais citadas, que mostram de relance, por exemplo, se o estudo foi feito em humanos ou em camundongos.
+4. **Relações**: o grafo de toda a literatura, ordenado pelo número de artigos. É a base para levantar hipóteses, como achar fármacos já existentes associados a um gene (reposicionamento).
+
+---
+
 ## Segurança e privacidade
 
 A indexação é 100% local, mas os **trechos retornados pela busca são enviados ao Claude**. Por isso existe uma camada de *Data Loss Prevention* com defesa em profundidade:
@@ -127,7 +153,7 @@ A indexação é 100% local, mas os **trechos retornados pela busca são enviado
 | **Auditoria** | Cada chamada é registrada em `logs/auditoria.jsonl`: argumentos, fontes, trechos mascarados e **hash SHA-256** do que saiu. O texto em si não é salvo por padrão, para o log não virar outra cópia dos dados. |
 | **Consentimento** | Aviso de privacidade com aceite explícito (padrão = "Não") antes da primeira indexação. |
 
-Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a telemetria do Qdrant e do Hugging Face fica desligada, o servidor roda o modelo em modo offline, e o instalador confere o hash oficial do executável baixado.
+Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a telemetria do Qdrant e do Hugging Face fica desligada, o servidor roda o modelo em modo offline, o instalador confere o hash oficial do executável baixado e todas as ferramentas são declaradas como somente leitura (`readOnlyHint`): nenhuma cria, altera ou apaga nada.
 
 ---
 
@@ -207,6 +233,14 @@ Antes do `indexar.py`, baixe o [Qdrant v1.19.1 para Windows](https://github.com/
 
 </details>
 
+### Atualizando de uma versão anterior
+
+1. Baixe a versão nova e copie os arquivos para a pasta atual, substituindo os antigos. O `config.toml`, os dados (`qdrant_data\`) e o índice dos PDFs são preservados.
+2. Rode o `instalar.bat` de novo. Ele só instala o que mudou.
+3. Reinicie o Claude Desktop pela bandeja → Sair.
+
+Vindo de uma versão com `modo = "docker"` no `config.toml`: essa opção foi removida na v1.1.0. O instalador baixa o `qdrant.exe`, que usa a mesma pasta de dados, então não é preciso reindexar. Depois disso, a linha `modo` pode ser apagada.
+
 ---
 
 ## Uso
@@ -277,6 +311,7 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 | `seguranca.py` | Classificação, mascaramento de dados pessoais e auditoria |
 | `registrar_claude.py` | Registra/remove o servidor no config do Claude Desktop |
 | `instalar.ps1` / `.bat` | Instalador |
+
 ---
 
 ## Limitações e próximos passos
@@ -308,7 +343,11 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 | Busca nos PDFs dá erro de conexão | Veja `logs\qdrant.log`; rode o `instalar.bat` de novo |
 | 1ª busca demora | O modelo é pré-carregado em segundo plano logo que o Claude abre; perguntas feitas nos primeiros segundos podem esperar ele terminar |
 | Indexação parece travada | PDFs escaneados passam por OCR (~1 min/página na CPU); o log mostra a página atual |
-| Ferramentas não aparecem no Claude | Reinicie o Claude pela bandeja; confira em Configurações → Desenvolvedor |
+| Ferramentas não aparecem no Claude | Reinicie o Claude pela bandeja (fechar a janela não basta: o app e o servidor continuam rodando); confira em Configurações → Desenvolvedor |
+| O Claude pede permissão a cada uso | É uma configuração do Claude Desktop: escolha **Permitir sempre** no pedido, ou ajuste as ferramentas do `agente-pesquisa` nas configurações de conectores |
+| Responde sobre literatura sem citar PMIDs | Confira se o servidor foi reiniciado (as ferramentas de literatura existem a partir da v1.1.0); pedir "segundo a literatura" ou "cite os artigos" também ajuda |
+| `bin\qdrant.exe não encontrado` | Rode o `instalar.bat` de novo (acontece ao atualizar de uma instalação que usava Docker) |
+| Erro "PubTator não respondeu" | Instabilidade do NCBI; o servidor já tenta de novo sozinho, então espere alguns minutos |
 | "O índice ainda não existe" | Rode `indexar.py` |
 | Aviso "página(s) sem texto nem com OCR" | Normal para páginas só com figuras ou em branco |
 
