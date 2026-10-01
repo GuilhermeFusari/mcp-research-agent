@@ -54,43 +54,29 @@ if (Test-Path $Config) {
 }
 
 Passo "4/6 Preparando o banco vetorial (Qdrant)"
-$modo = if ((Get-Content $Config -Raw) -match '(?m)^\s*modo\s*=\s*"docker"') { "docker" } else { "executavel" }
-Write-Host "Modo: $modo"
-
-if ($modo -eq "docker") {
-    for ($i = 0; $i -lt 24; $i++) {
-        docker info *> $null
-        if ($LASTEXITCODE -eq 0) { break }
-        if ($i -eq 0) { Write-Host "Abra o Docker Desktop; vou esperar..." -ForegroundColor Yellow }
-        Start-Sleep -Seconds 5
-    }
-    Push-Location $Projeto; docker compose up -d; $rc = $LASTEXITCODE; Pop-Location
-    if ($rc -ne 0) { Falha "docker compose falhou. O Docker Desktop está aberto?" }
+$Exe = Join-Path $Projeto "bin\qdrant.exe"
+if (Test-Path $Exe) {
+    Write-Host "qdrant.exe já baixado."
 } else {
-    $Exe = Join-Path $Projeto "bin\qdrant.exe"
-    if (Test-Path $Exe) {
-        Write-Host "qdrant.exe já baixado."
-    } else {
-        $versao = "v1.19.1"
-        $hashEsperado = "9b6f69bd85f6abed4bc13f943099f55c6ffd55f5dd90388635320d8fbb569eb0"
-        $url = "https://github.com/qdrant/qdrant/releases/download/$versao/qdrant-x86_64-pc-windows-msvc.zip"
-        $zip = Join-Path $env:TEMP "qdrant-$versao.zip"
+    $versao = "v1.19.1"
+    $hashEsperado = "9b6f69bd85f6abed4bc13f943099f55c6ffd55f5dd90388635320d8fbb569eb0"
+    $url = "https://github.com/qdrant/qdrant/releases/download/$versao/qdrant-x86_64-pc-windows-msvc.zip"
+    $zip = Join-Path $env:TEMP "qdrant-$versao.zip"
 
-        Write-Host "Baixando Qdrant $versao (~30 MB)..."
-        $ProgressPreference = "SilentlyContinue"
-        Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
-        $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-        if ($hash -ne $hashEsperado) {
-            Remove-Item $zip
-            Falha "O arquivo baixado não confere com o hash oficial. Não vou executá-lo."
-        }
-        Expand-Archive $zip (Join-Path $Projeto "bin") -Force
+    Write-Host "Baixando Qdrant $versao (~30 MB)..."
+    $ProgressPreference = "SilentlyContinue"
+    Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
+    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($hash -ne $hashEsperado) {
         Remove-Item $zip
-        Write-Host "Hash conferido; qdrant.exe instalado em bin\."
+        Falha "O arquivo baixado não confere com o hash oficial. Não vou executá-lo."
     }
-    & $Py -c "import rag; rag.garantir_qdrant(rag.carregar_config()); print('Qdrant rodando.')"
-    if ($LASTEXITCODE -ne 0) { Falha "Não consegui iniciar o Qdrant. Veja logs\qdrant.log." }
+    Expand-Archive $zip (Join-Path $Projeto "bin") -Force
+    Remove-Item $zip
+    Write-Host "Hash conferido; qdrant.exe instalado em bin\."
 }
+& $Py -c "import rag; rag.garantir_qdrant(rag.carregar_config()); print('Qdrant rodando.')"
+if ($LASTEXITCODE -ne 0) { Falha "Não consegui iniciar o Qdrant. Veja logs\qdrant.log." }
 
 Passo "5/6 Baixando o modelo de embeddings (~1 GB, só na 1ª vez)"
 & $Py -c "import rag; rag.criar_embeddings(rag.carregar_config()).embed_query('teste'); print('Modelo pronto.')"

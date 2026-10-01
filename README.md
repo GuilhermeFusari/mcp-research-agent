@@ -46,7 +46,7 @@ Claude: [usa buscar_pdfs] Segundo review_amp.pdf (p. 4), eles se ligam por inter
 - **Indexação incremental**: cada PDF é identificado pelo hash SHA-256 do conteúdo. Rodar de novo só processa arquivos novos ou alterados, remove do índice os apagados e indexa duplicatas uma vez só.
 - **OCR automático**: páginas sem texto (escaneadas) são lidas com EasyOCR. Os trechos vindos de OCR são marcados para o Claude saber que podem ter erros.
 - **Resiliência**: novas tentativas com *backoff* em falhas temporárias das APIs públicas, timeouts em todas as chamadas e mensagens de erro legíveis para o modelo.
-- **Instalador de um clique**: `instalar.bat` configura tudo, sem exigir Docker (o banco roda como processo *sidecar*).
+- **Instalador de um clique**: `instalar.bat` configura tudo, sem Docker (o banco roda como processo *sidecar*).
 
 ---
 
@@ -128,8 +128,8 @@ Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a te
 |---|---|---|
 | **SDK oficial `mcp`** (`MCPServer`) | `fastmcp` standalone, SDK de baixo nível | Referência mantida junto com a especificação; menos dependências. |
 | **httpx** (assíncrono) | requests, aiohttp | Uma chamada lenta não trava o servidor; já é dependência do SDK. |
-| **Qdrant** | ChromaDB, FAISS, LanceDB, pgvector | Robusto, com filtros por metadados e índices de payload. O mesmo código funciona via Docker ou como executável local. |
-| **Qdrant como processo *sidecar*** | Docker obrigatório, modo embutido | Docker é pesado para usuário final. O modo embutido permite só um processo por vez (indexador × servidor). O sidecar é o padrão de apps desktop como Ollama e language servers. |
+| **Qdrant** | ChromaDB, FAISS, LanceDB, pgvector | Robusto, com filtros por metadados e índices de payload, e distribuído como um executável único para Windows. |
+| **Qdrant como processo *sidecar*** | Docker, modo embutido | Docker é pesado para usuário final e complicava os releases (havia dois modos para manter e testar), então foi removido. O modo embutido permite só um processo por vez (indexador × servidor). O sidecar é o padrão de apps desktop como Ollama e language servers. |
 | **`intfloat/multilingual-e5-base`** | MiniLM (só inglês), bge-m3 (mais pesado), APIs pagas | PT + EN no mesmo espaço vetorial, roda em CPU. APIs de embedding enviariam o conteúdo dos PDFs para fora. |
 | **PyMuPDF** direto | `langchain-community` loaders, pypdf | Rápido e bom com duas colunas. O `langchain-community` está sendo descontinuado. |
 | **EasyOCR** | Tesseract, docling | Só `pip install`, sem instalador externo para o usuário final. Reaproveita o PyTorch já instalado. |
@@ -179,17 +179,18 @@ O instalador é idempotente (pode ser rodado de novo) e executa:
 ```
 
 <details>
-<summary><b>Instalação manual / modo Docker</b></summary>
+<summary><b>Instalação manual</b></summary>
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy config.exemplo.toml config.toml    # edite as pastas e use modo = "docker"
-docker compose up -d
+copy config.exemplo.toml config.toml    # edite as pastas
 python indexar.py
 python registrar_claude.py
 ```
+
+Antes do `indexar.py`, baixe o [Qdrant v1.19.1 para Windows](https://github.com/qdrant/qdrant/releases/tag/v1.19.1) (`qdrant-x86_64-pc-windows-msvc.zip`) e extraia o `qdrant.exe` em `bin\`. O programa o inicia sozinho.
 
 </details>
 
@@ -238,7 +239,7 @@ Tudo em `config.toml` (gerado a partir de `config.exemplo.toml`):
 | `[indexacao]` | pastas indexadas (allowlist) e termos de exclusão |
 | `[chunking]` | tamanho e sobreposição dos trechos |
 | `[embeddings]` | modelo de embeddings |
-| `[qdrant]` | `modo = "executavel"` (padrão) ou `"docker"` |
+| `[qdrant]` | porta (`url`) e nome da coleção |
 | `[seguranca]` | níveis de classificação, mascaramento, auditoria |
 | `[ocr]` | liga/desliga, idiomas, resolução (DPI) |
 
@@ -258,7 +259,6 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 | `seguranca.py` | Classificação, mascaramento de dados pessoais e auditoria |
 | `registrar_claude.py` | Registra/remove o servidor no config do Claude Desktop |
 | `instalar.ps1` / `.bat` | Instalador |
-| `docker-compose.yml` | Alternativa: Qdrant via Docker |
 ---
 
 ## Limitações e próximos passos

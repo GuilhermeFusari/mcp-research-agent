@@ -57,10 +57,8 @@ EXE_QDRANT = PASTA_PROJETO / "bin" / "qdrant.exe"
 
 
 def dica_conexao(config: dict) -> str:
-    """Mensagem de ajuda certa para cada modo, usada quando a conexão falha."""
-    if config["qdrant"].get("modo", "docker") == "executavel":
-        return "Veja logs/qdrant.log ou rode o instalar.bat de novo."
-    return "O Docker Desktop está aberto e o container rodando? (docker compose up -d)"
+    """Mensagem de ajuda usada quando a conexão com o Qdrant falha."""
+    return "Veja logs/qdrant.log ou rode o instalar.bat de novo."
 
 
 def _qdrant_respondendo(url: str) -> bool:
@@ -73,14 +71,13 @@ def _qdrant_respondendo(url: str) -> bool:
 
 
 def garantir_qdrant(config: dict) -> None:
-    """No modo "executavel", liga o qdrant.exe em segundo plano se ele não estiver rodando.
+    """Liga o qdrant.exe em segundo plano se ele não estiver rodando.
 
     No Windows o processo costuma encerrar junto com quem o iniciou (job object),
     então isto deve ser chamado antes de cada uso, não só na inicialização.
     """
-    cfg = config["qdrant"]
-    url = cfg["url"]
-    if cfg.get("modo", "docker") != "executavel" or _qdrant_respondendo(url):
+    url = config["qdrant"]["url"]
+    if _qdrant_respondendo(url):
         return
 
     if not EXE_QDRANT.exists():

@@ -25,9 +25,7 @@ sobreposicao = 200
 modelo = "intfloat/multilingual-e5-base"
 
 [qdrant]
-# "executavel": o programa inicia o bin/qdrant.exe sozinho (sem Docker).
-# "docker":     o Qdrant roda via "docker compose up -d".
-modo = "executavel"
+# O programa inicia o bin/qdrant.exe sozinho, em segundo plano (baixado pelo instalador).
 # Use 127.0.0.1, não "localhost" (no Windows, localhost adiciona ~2 s por conexão).
 url = "http://127.0.0.1:6333"
 colecao = "pdfs"
