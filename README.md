@@ -1,8 +1,9 @@
 # MCP Research Agent
 
-Servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) que dá ao **Claude Desktop** duas capacidades de pesquisa científica:
+Servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) que dá ao **Claude Desktop** três capacidades de pesquisa científica:
 
 - 🧬 **Proteínas e peptídeos**: consulta o [UniProt](https://www.uniprot.org) por nome, gene, ID ou sequência de aminoácidos e retorna função, localização celular e estruturas (PDB/AlphaFold).
+- 📰 **Literatura científica**: busca e lê artigos do PubMed pelo [PubTator3](https://www.ncbi.nlm.nih.gov/research/pubtator3/) (NCBI/NIH), com genes, doenças e químicos já anotados, e consulta relações extraídas de toda a literatura (ex.: que doenças um fármaco trata), citando PMIDs.
 - 📚 **Biblioteca pessoal de PDFs**: busca semântica (RAG) nos PDFs do seu computador, **em português e inglês**, inclusive PDFs escaneados (OCR), com citação de arquivo e página.
 
 Tudo roda localmente no Windows: os PDFs, o índice vetorial e o modelo de embeddings nunca saem da máquina. Só os trechos relevantes de cada busca vão para o Claude, e passam por uma camada de segurança antes disso.
@@ -40,11 +41,17 @@ Claude: [usa buscar_pdfs] Segundo review_amp.pdf (p. 4), eles se ligam por inter
 | `buscar_proteina` | Busca no UniProt. Um **roteador** detecta o tipo da entrada: nome/gene/ID → busca textual priorizando entradas revisadas (Swiss-Prot); sequência → Peptide Search (correspondência exata); DNA/RNA → recusa com explicação. |
 | `buscar_pdfs` | Busca semântica nos PDFs locais. Encontra trechos pelo **significado**, não por palavra exata, e funciona entre idiomas (pergunta em PT encontra texto em EN). Filtro opcional por nome de arquivo. |
 | `listar_pdfs` | Lista os PDFs indexados (nomes e nº de trechos), ocultando os confidenciais. |
+| `buscar_entidade` | Converte um nome ("p53", "doxorubicin") no ID normalizado do PubTator (`@GENE_TP53`), que encontra todos os sinônimos. Mostra os candidatos para o Claude conferir a ambiguidade. |
+| `buscar_artigos` | Busca no PubMed por texto livre, IDs de entidade (combináveis com AND/OR) ou relações. Retorna PMID, ano, revista e título, 10 por página. |
+| `ler_artigo` | Lê um artigo pelo PMID: resumo ou, para artigos do PMC Open Access, resultados e discussão. Termina com um resumo das entidades anotadas e avisa quando o texto completo não existe. |
+| `buscar_relacoes` | Relações entre entidades extraídas da literatura (trata, causa, associa, correlaciona…), com o nº de artigos que sustenta cada uma. Base para levantar hipóteses como reposicionamento de fármacos. |
 
 ### Destaques
 
 - **Indexação incremental**: cada PDF é identificado pelo hash SHA-256 do conteúdo. Rodar de novo só processa arquivos novos ou alterados, remove do índice os apagados e indexa duplicatas uma vez só.
 - **OCR automático**: páginas sem texto (escaneadas) são lidas com EasyOCR. Os trechos vindos de OCR são marcados para o Claude saber que podem ter erros.
+- **Economia de contexto**: a busca de artigos e a leitura são ferramentas separadas (o Claude vê os títulos e só abre o que interessa), e a leitura descarta métodos, tabelas e referências, o que reduz um artigo completo típico em ~58%.
+- **Limite de taxa**: as chamadas ao PubTator são espaçadas para respeitar o limite de 3 requisições/s do NCBI, inclusive quando o Claude chama várias ferramentas em paralelo.
 - **Resiliência**: novas tentativas com *backoff* em falhas temporárias das APIs públicas, timeouts em todas as chamadas e mensagens de erro legíveis para o modelo.
 - **Instalador de um clique**: `instalar.bat` configura tudo, sem Docker (o banco roda como processo *sidecar*).
 
@@ -57,6 +64,7 @@ flowchart LR
     subgraph PC["💻 Computador do usuário"]
         CD["Claude Desktop"] <-->|"MCP (stdio / JSON-RPC)"| S["servidor.py"]
         S --> U["uniprot.py"]
+        S --> PT["pubtator.py"]
         S --> B["busca_pdfs.py"]
         B --> SEG["seguranca.py<br/>classificação · mascaramento · auditoria"]
         B --> E["Modelo de embeddings<br/>multilingual-e5-base"]
@@ -66,11 +74,12 @@ flowchart LR
         P["📄 PDFs locais"] --> I
     end
     U <-->|HTTPS| UP["🌐 UniProt REST API"]
+    PT <-->|"HTTPS (≤ 3 req/s)"| PTA["🌐 PubTator3 API (NCBI)"]
     CD <-->|"trechos selecionados"| C["☁️ Claude"]
 ```
 
 - O **Claude Desktop** inicia o `servidor.py` como subprocesso e troca mensagens JSON-RPC pela entrada/saída padrão (*stdio*).
-- A **lógica de negócio** (`uniprot.py`, `busca_pdfs.py`) é separada do MCP (`servidor.py`). Dá para testar cada módulo sozinho e reaproveitá-los numa futura interface própria.
+- A **lógica de negócio** (`uniprot.py`, `pubtator.py`, `busca_pdfs.py`) é separada do MCP (`servidor.py`). Dá para testar cada módulo sozinho e reaproveitá-los numa futura interface própria.
 - O **indexador** é um script separado, rodado quando há PDFs novos.
 
 ---
@@ -134,6 +143,10 @@ Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a te
 | **PyMuPDF** direto | `langchain-community` loaders, pypdf | Rápido e bom com duas colunas. O `langchain-community` está sendo descontinuado. |
 | **EasyOCR** | Tesseract, docling | Só `pip install`, sem instalador externo para o usuário final. Reaproveita o PyTorch já instalado. |
 | **Peptide Search** para sequências | BLAST | Rápido e exato para peptídeos. O BLAST (similaridade) é assíncrono e lento, então ficou como próximo passo. |
+| **PubTator3** para literatura | E-utilities do PubMed, Europe PMC | Além de buscar, entrega as entidades já anotadas e normalizadas ("Dox" = "doxorubicin") e um grafo de relações extraído de toda a literatura. |
+| **Buscar e ler em ferramentas separadas** | Uma ferramenta que já devolve os textos | Um artigo completo tem dezenas de milhares de caracteres. Separar deixa o Claude escolher o que ler, como o RAG faz com os trechos. |
+| **Resolver a entidade numa ferramenta à parte** | Converter o nome em ID automaticamente | O autocomplete casa por prefixo: "aging" vira "Aging Premature", e "CAT" pode ser gene ou catarata. Mostrando os candidatos, quem decide é o Claude, que tem o contexto da conversa. |
+| **Filtrar seções do artigo** | Enviar o texto inteiro | Resultados e discussão respondem "o que o artigo descobriu"; tabelas viram texto ilegível e referências não têm conteúdo. Em revisões (sem resultados/discussão), o corpo é mantido. Teto de 20 mil caracteres, com aviso quando corta. |
 
 <details>
 <summary><b>Detalhes que valem uma nota</b></summary>
@@ -204,6 +217,9 @@ Converse normalmente no Claude Desktop. O servidor instrui o Claude a usar as fe
 - *"O que meus PDFs dizem sobre peptídeos antimicrobianos?"*
 - *"Quais PDFs eu tenho indexados?"*
 - *"De qual proteína é o peptídeo GIVEQCCTSICSLYQLENYCN?"*
+- *"Que evidências recentes existem sobre TP53 em câncer de mama? Cite os artigos."*
+- *"Quais doenças a doxorrubicina trata, segundo a literatura?"*
+- *"Que químicos reduzem a atividade de TP53?"*
 
 **Adicionou ou alterou PDFs?** Reindexe (só processa o que mudou):
 
@@ -219,6 +235,7 @@ Cada módulo roda sozinho:
 
 ```bash
 python uniprot.py TP53
+python pubtator.py
 python busca_pdfs.py "mecanismo de ação de peptídeos"
 ```
 
@@ -253,6 +270,7 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 |---|---|
 | `servidor.py` | Servidor MCP: registra as ferramentas e faz a auditoria |
 | `uniprot.py` | Cliente do UniProt: roteador de entrada, busca textual, Peptide Search |
+| `pubtator.py` | Cliente do PubTator3: entidades, busca e leitura de artigos, relações; limite de taxa |
 | `busca_pdfs.py` | Busca semântica no Qdrant, com filtros de segurança |
 | `indexar.py` | Pipeline de indexação: PDF → texto/OCR → chunks → embeddings → Qdrant |
 | `rag.py` | Config, modelo de embeddings e ciclo de vida do Qdrant (sidecar) |
@@ -268,11 +286,14 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 - Só Windows (instalador, caminhos e Qdrant sidecar).
 - A busca por sequência é **exata**: sequências parecidas, mas não idênticas, não são encontradas.
 - OCR na CPU é lento (~1 min por página densa); com GPU NVIDIA + PyTorch CUDA fica bem mais rápido (detectado automaticamente).
+- As anotações e relações do PubTator são extraídas por IA e erram, principalmente com nomes curtos que também são palavras comuns (o gene CAT traz artigos sobre gatos). Os nºs de artigos ajudam a separar evidência de ruído.
+- Texto completo de artigos só existe para o PMC Open Access; nos demais, só o resumo (a ferramenta avisa).
 - O Claude decide quando usar as ferramentas: as instruções aumentam muito a chance, mas não garantem 100%.
 
 **Roadmap**
 
 - [ ] BLAST para busca por similaridade de sequência
+- [ ] Cache local de artigos lidos (artigo publicado não muda)
 - [ ] Ferramenta de fármacos e pequenas moléculas (PubChem / ChEBI)
 - [ ] Interface própria (ex.: Streamlit + API do Claude), com busca garantida antes da resposta
 - [ ] Suporte a macOS/Linux
