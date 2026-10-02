@@ -1,31 +1,30 @@
-"""Busca semântica nos PDFs indexados (a lógica; o servidor MCP só a expõe)."""
+"""Busca semântica nos PDFs indexados (facade sobre Qdrant + embeddings + filtros de segurança)."""
 
 import logging
 from functools import lru_cache
 
-import rag
-import seguranca
+from agente_pesquisa import seguranca
+from agente_pesquisa.biblioteca import qdrant
+from agente_pesquisa.biblioteca.embeddings import criar_embeddings
+from agente_pesquisa.config import carregar_config
+from agente_pesquisa.contrato import ErroEsperado, Resultado
 
 log = logging.getLogger("agente-pesquisa")
 
 MAX_CHARS_TRECHO = 1200
 
 
-class ErroBusca(Exception):
-    """Erro esperado (Qdrant fora, índice vazio...), com mensagem legível."""
-
-
 @lru_cache(maxsize=1)
 def _config() -> dict:
-    return rag.carregar_config()
+    return carregar_config()
 
 
 def _pronto():
     """Garante que o Qdrant está no ar e devolve os recursos (cliente, modelo...)."""
     try:
-        rag.garantir_qdrant(_config())
+        qdrant.garantir_qdrant(_config())
     except Exception as e:
-        raise ErroBusca(f"Não consegui iniciar o banco vetorial. {rag.dica_conexao(_config())}") from e
+        raise ErroEsperado(f"Não consegui iniciar o banco vetorial. {qdrant.DICA_CONEXAO}") from e
     return _recursos()
 
 
@@ -35,24 +34,24 @@ def _recursos():
     config = _config()
     colecao = config["qdrant"]["colecao"]
     try:
-        client = rag.criar_cliente_qdrant(config)
+        client = qdrant.criar_cliente(config)
         existe = client.collection_exists(colecao)
     except Exception as e:
-        raise ErroBusca(
-            f"Não consegui conectar no banco vetorial (Qdrant). {rag.dica_conexao(config)}"
+        raise ErroEsperado(
+            f"Não consegui conectar no banco vetorial (Qdrant). {qdrant.DICA_CONEXAO}"
         ) from e
     if not existe:
-        raise ErroBusca("O índice de PDFs ainda não existe. Rode primeiro: python indexar.py")
+        raise ErroEsperado("O índice de PDFs ainda não existe. Rode primeiro: python indexar.py")
 
     from langchain_qdrant import QdrantVectorStore
 
     store = QdrantVectorStore(
-        client=client, collection_name=colecao, embedding=rag.criar_embeddings(config)
+        client=client, collection_name=colecao, embedding=criar_embeddings(config)
     )
     return client, colecao, store, config.get("seguranca", {})
 
 
-def buscar(pergunta: str, k: int = 5, arquivo: str | None = None) -> tuple[str, dict]:
+def buscar(pergunta: str, k: int = 5, arquivo: str | None = None) -> Resultado:
     """Devolve os k trechos mais parecidos (em significado) com a pergunta."""
     from qdrant_client import models
 
@@ -68,7 +67,7 @@ def buscar(pergunta: str, k: int = 5, arquivo: str | None = None) -> tuple[str, 
     if arquivo:
         nomes = {n for n in permitidos.values() if arquivo.lower() in n.lower()}
         if not nomes:
-            raise ErroBusca(f"Nenhum PDF indexado tem '{arquivo}' no nome. Use listar_pdfs para ver os nomes.")
+            raise ErroEsperado(f"Nenhum PDF indexado tem '{arquivo}' no nome. Use listar_pdfs para ver os nomes.")
         condicoes_must.append(models.FieldCondition(
             key="metadata.arquivo", match=models.MatchAny(any=sorted(nomes))
         ))
@@ -77,7 +76,7 @@ def buscar(pergunta: str, k: int = 5, arquivo: str | None = None) -> tuple[str, 
 
     resultados = store.similarity_search_with_score(pergunta, k=k, filter=filtro)
     if not resultados:
-        raise ErroBusca("Nenhum trecho encontrado" + (f" no arquivo '{arquivo}'." if arquivo else "."))
+        raise ErroEsperado("Nenhum trecho encontrado" + (f" no arquivo '{arquivo}'." if arquivo else "."))
 
     blocos, fontes, mascaramentos = [], [], {}
     for i, (doc, score) in enumerate(resultados, start=1):
@@ -100,9 +99,10 @@ def buscar(pergunta: str, k: int = 5, arquivo: str | None = None) -> tuple[str, 
         f"{len(resultados)} trecho(s) mais relevantes nos PDFs locais para: '{pergunta}'\n\n"
         + "\n\n---\n\n".join(blocos)
     )
-    detalhes = {"fontes": fontes, "mascaramentos": mascaramentos,
-                "pdfs_bloqueados_por_classificacao": len(bloqueados)}
-    return saida, detalhes
+    return Resultado(saida, auditoria={
+        "fontes": fontes, "mascaramentos": mascaramentos,
+        "pdfs_bloqueados_por_classificacao": len(bloqueados),
+    })
 
 
 def _mapa_caminhos(client, colecao: str) -> dict[str, tuple[str, int]]:
@@ -133,7 +133,7 @@ def _separar_por_classificacao(client, colecao: str, cfg_seg: dict) -> tuple[dic
     return permitidos, bloqueados
 
 
-def listar_arquivos() -> tuple[str, dict]:
+def listar_arquivos() -> Resultado:
     """Lista os PDFs do índice (nome e nº de trechos), sem conteúdo."""
     client, colecao, _, cfg_seg = _pronto()
     mapa = _mapa_caminhos(client, colecao)
@@ -144,7 +144,7 @@ def listar_arquivos() -> tuple[str, dict]:
     saida = f"{len(visiveis)} PDF(s) indexados:\n" + "\n".join(linhas)
     if ocultos:
         saida += f"\n\n({ocultos} PDF(s) ocultos por classificação de segurança.)"
-    return saida, {"pdfs_bloqueados_por_classificacao": ocultos}
+    return Resultado(saida, auditoria={"pdfs_bloqueados_por_classificacao": ocultos})
 
 
 if __name__ == "__main__":
@@ -152,6 +152,6 @@ if __name__ == "__main__":
 
     sys.stdout.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.WARNING)
-    texto, detalhes = buscar(" ".join(sys.argv[1:]) or "peptídeos antimicrobianos")
-    print(texto)
-    print("\n[auditoria]", detalhes)
+    resultado = buscar(" ".join(sys.argv[1:]) or "peptídeos antimicrobianos")
+    print(resultado.texto)
+    print("\n[auditoria]", resultado.auditoria)

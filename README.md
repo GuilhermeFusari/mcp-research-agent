@@ -25,6 +25,7 @@ Claude: [usa buscar_entidade e buscar_relacoes] A relação mais sustentada é c
 
 - [Funcionalidades](#funcionalidades)
 - [Arquitetura](#arquitetura)
+- [Padrões de projeto](#padrões-de-projeto)
 - [Como funciona o RAG](#como-funciona-o-rag)
 - [Como funciona a busca na literatura](#como-funciona-a-busca-na-literatura)
 - [Segurança e privacidade](#segurança-e-privacidade)
@@ -65,28 +66,87 @@ Claude: [usa buscar_entidade e buscar_relacoes] A relação mais sustentada é c
 
 ## Arquitetura
 
+O código é organizado em **camadas**: cada uma só conhece a de baixo.
+
 ```mermaid
 flowchart LR
     subgraph PC["💻 Computador do usuário"]
-        CD["Claude Desktop"] <-->|"MCP (stdio / JSON-RPC)"| S["servidor.py"]
-        S --> U["uniprot.py"]
-        S --> PT["pubtator.py"]
-        S --> B["busca_pdfs.py"]
-        B --> SEG["seguranca.py<br/>classificação · mascaramento · auditoria"]
-        B --> E["Modelo de embeddings<br/>multilingual-e5-base"]
-        B <--> Q[("Qdrant<br/>banco vetorial")]
-        I["indexar.py"] --> E
-        I --> Q
+        CD["Claude Desktop"] <-->|"MCP (stdio / JSON-RPC)"| F
+
+        subgraph ENT["Entrada · adapter"]
+            F["ferramentas.py<br/>_executar: log · auditoria · erros"]
+        end
+
+        subgraph FON["fontes/ · gateways"]
+            U["uniprot.py"]
+            PT["pubtator.py"]
+            H["http.py<br/>retry · limite de taxa"]
+        end
+
+        subgraph BIB["biblioteca/ · RAG local"]
+            B["busca.py<br/>facade"]
+            E["embeddings.py"]
+            Q["qdrant.py<br/>sidecar"]
+            I["indexador.py<br/>pipeline"]
+        end
+
+        F --> U & PT & B
+        U & PT --> H
+        F --> SEG["seguranca.py"]
+        B --> SEG
+        B --> E & Q
+        I --> E & Q
         P["📄 PDFs locais"] --> I
+        Q <--> DB[("Qdrant")]
     end
-    U <-->|HTTPS| UP["🌐 UniProt REST API"]
-    PT <-->|"HTTPS (≤ 3 req/s)"| PTA["🌐 PubTator3 API (NCBI)"]
+    H <-->|HTTPS| APIS["🌐 UniProt · PubTator3 (NCBI)"]
     CD <-->|"trechos selecionados"| C["☁️ Claude"]
 ```
 
-- O **Claude Desktop** inicia o `servidor.py` como subprocesso e troca mensagens JSON-RPC pela entrada/saída padrão (*stdio*).
-- A **lógica de negócio** (`uniprot.py`, `pubtator.py`, `busca_pdfs.py`) é separada do MCP (`servidor.py`). Dá para testar cada módulo sozinho e reaproveitá-los numa futura interface própria.
-- O **indexador** é um script separado, rodado quando há PDFs novos.
+| Camada | Pasta | Responsabilidade | Conhece o MCP? |
+|---|---|---|---|
+| **Entrada** | `ferramentas.py` | Declara as ferramentas para o Claude e passa toda chamada por um caminho único | Sim (só ela) |
+| **Fontes** | `fontes/` | Um cliente por API externa: HTTP, JSON, retry e formatação do texto | Não |
+| **Biblioteca** | `biblioteca/` | RAG local: indexação, modelo de embeddings, banco vetorial e busca | Não |
+| **Transversal** | `seguranca.py`, `config.py`, `contrato.py` | Políticas e definições usadas por todas as camadas | Não |
+
+Como só a camada de entrada conhece o MCP, as fontes podem ser testadas sozinhas e reaproveitadas numa futura interface própria (web, CLI) sem mudança.
+
+---
+
+## Padrões de projeto
+
+| Padrão | Onde | Para quê |
+|---|---|---|
+| **Adapter** | `ferramentas.py` | Traduz o protocolo MCP em chamadas de funções Python comuns |
+| **Contrato** | `contrato.py` | Toda fonte devolve `Resultado` ou levanta `ErroEsperado`: a entrada trata todas igual |
+| **Gateway** | `fontes/uniprot.py`, `fontes/pubtator.py` | Um módulo por serviço externo esconde URLs, JSON e erros da API |
+| **Retry com backoff** + **limite de taxa** | `fontes/http.py` | Falhas temporárias (timeout, 429, 5xx) são repetidas com espera crescente; o NCBI exige ≤ 3 req/s |
+| **Strategy** (roteador) | `uniprot.detectar_tipo` | Escolhe o algoritmo de busca (nome × sequência) conforme a entrada |
+| **Facade** | `biblioteca/busca.py` | Uma função simples esconde Qdrant, embeddings e filtros de segurança |
+| **Pipeline** | `biblioteca/indexador.py` | Extrair → dividir → vetorizar → gravar, em etapas independentes |
+| **Sidecar** | `biblioteca/qdrant.py` | O banco vetorial roda como processo auxiliar, ligado sob demanda |
+| **Lazy loading** + **memoização** | `embeddings.py`, `busca._recursos` | Bibliotecas e modelo pesados só carregam quando usados, e uma vez só |
+
+### O caminho de uma chamada
+
+Toda ferramenta segue o mesmo fluxo, definido uma vez em `_executar`:
+
+```
+Claude ──► ferramenta (valida limites)
+               │
+               ▼
+           _executar ──► fonte.operacao(...) ──► Resultado(texto, auditoria)
+               │                                   │
+               │   ErroEsperado? ──► ToolError (mensagem legível para o Claude)
+               ▼
+           seguranca.registrar(...)  ──►  logs/auditoria.jsonl
+               │
+               ▼
+Claude ◄── resultado.texto
+```
+
+Para criar uma ferramenta nova: (1) escreva a operação numa fonte, devolvendo `Resultado`; (2) declare a ferramenta em `ferramentas.py` chamando `_executar`. Log, auditoria e tratamento de erro vêm de graça.
 
 ---
 
@@ -265,12 +325,12 @@ Use `--reindexar` para reprocessar tudo (ex.: depois de ligar o OCR).
 
 ### Testando sem o Claude
 
-Cada módulo roda sozinho:
+Cada fonte roda sozinha (a partir da raiz do projeto):
 
 ```bash
-python uniprot.py TP53
-python pubtator.py
-python busca_pdfs.py "mecanismo de ação de peptídeos"
+python -m agente_pesquisa.fontes.uniprot TP53
+python -m agente_pesquisa.fontes.pubtator
+python -m agente_pesquisa.biblioteca.busca "mecanismo de ação de peptídeos"
 ```
 
 E o servidor pode ser inspecionado com o [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
@@ -300,17 +360,27 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 
 ## Estrutura do projeto
 
-| Arquivo | Papel |
-|---|---|
-| `servidor.py` | Servidor MCP: registra as ferramentas e faz a auditoria |
-| `uniprot.py` | Cliente do UniProt: roteador de entrada, busca textual, Peptide Search |
-| `pubtator.py` | Cliente do PubTator3: entidades, busca e leitura de artigos, relações; limite de taxa |
-| `busca_pdfs.py` | Busca semântica no Qdrant, com filtros de segurança |
-| `indexar.py` | Pipeline de indexação: PDF → texto/OCR → chunks → embeddings → Qdrant |
-| `rag.py` | Config, modelo de embeddings e ciclo de vida do Qdrant (sidecar) |
-| `seguranca.py` | Classificação, mascaramento de dados pessoais e auditoria |
-| `registrar_claude.py` | Registra/remove o servidor no config do Claude Desktop |
-| `instalar.ps1` / `.bat` | Instalador |
+```
+servidor.py               ponto de entrada do servidor MCP (o Claude Desktop executa este)
+indexar.py                ponto de entrada do indexador de PDFs
+registrar_claude.py       registra/remove o servidor no config do Claude Desktop
+instalar.ps1 / .bat       instalador
+config.exemplo.toml       modelo de configuração
+agente_pesquisa/
+├── ferramentas.py        ENTRADA: ferramentas MCP + _executar (log, auditoria, erros)
+├── contrato.py           Resultado e ErroEsperado: o que toda fonte devolve
+├── config.py             caminhos do projeto e leitura do config.toml
+├── seguranca.py          classificação, mascaramento de dados pessoais e auditoria
+├── fontes/               GATEWAYS: um cliente por API externa
+│   ├── http.py           retry com backoff + limite de taxa (compartilhado)
+│   ├── uniprot.py        roteador de entrada, busca textual, Peptide Search
+│   └── pubtator.py       entidades, busca e leitura de artigos, relações
+└── biblioteca/           RAG LOCAL
+    ├── indexador.py      pipeline: PDF → texto/OCR → chunks → embeddings → Qdrant
+    ├── busca.py          busca semântica com filtros de segurança
+    ├── embeddings.py     modelo multilingual-e5
+    └── qdrant.py         ciclo de vida do qdrant.exe (sidecar) e conexão
+```
 
 ---
 

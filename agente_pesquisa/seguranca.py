@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 
-import rag
+from agente_pesquisa.config import PASTA_PROJETO
 
 
 NIVEIS = {"publico": 0, "interno": 1, "confidencial": 2}
@@ -77,7 +77,7 @@ def mascarar(texto: str) -> tuple[str, dict[str, int]]:
     return texto, contagem
 
 
-PASTA_LOGS = rag.PASTA_PROJETO / "logs"
+PASTA_LOGS = PASTA_PROJETO / "logs"
 
 
 def registrar(ferramenta: str, argumentos: dict, saida: str, cfg_seg: dict, **extra) -> None:

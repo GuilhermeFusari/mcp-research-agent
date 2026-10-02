@@ -1,64 +1,29 @@
-"""Peças compartilhadas do RAG: configuração, modelo de embeddings e conexão com o Qdrant."""
+"""Banco vetorial Qdrant como processo sidecar: liga o bin/qdrant.exe quando preciso e conecta."""
 
 from __future__ import annotations
 
 import logging
 import os
-import tomllib
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+from agente_pesquisa.config import PASTA_PROJETO
 
-# Importações pesadas ficam dentro das funções: o servidor MCP precisa iniciar
-# rápido (o Claude Desktop tem timeout), e elas só são usadas na 1ª busca.
+# Importação pesada fica dentro da função: o servidor MCP precisa iniciar rápido.
 if TYPE_CHECKING:
-    from langchain_huggingface import HuggingFaceEmbeddings
     from qdrant_client import QdrantClient
 
 log = logging.getLogger("agente-pesquisa")
 
-PASTA_PROJETO = Path(__file__).resolve().parent
-CONFIG_PADRAO = PASTA_PROJETO / "config.toml"
+EXE_QDRANT = PASTA_PROJETO / "bin" / "qdrant.exe"
+DICA_CONEXAO = "Veja logs/qdrant.log ou rode o instalar.bat de novo."
 
 
-def carregar_config(caminho: Path | str | None = None) -> dict:
-    """Lê o config.toml e devolve um dicionário."""
-    with open(caminho or CONFIG_PADRAO, "rb") as f:
-        return tomllib.load(f)
-
-
-def criar_embeddings(config: dict) -> HuggingFaceEmbeddings:
-    """Carrega o modelo de embeddings (baixa na 1ª vez, ~1 GB; depois usa o cache)."""
-    import torch
-    from langchain_huggingface import HuggingFaceEmbeddings
-
-    dispositivo = "cuda" if torch.cuda.is_available() else "cpu"
-    log.info("Embeddings: modelo=%s dispositivo=%s", config["embeddings"]["modelo"], dispositivo)
-
-    # Modelos E5 foram treinados com os prefixos "passage: " (documentos) e "query: " (buscas).
-    return HuggingFaceEmbeddings(
-        model_name=config["embeddings"]["modelo"],
-        model_kwargs={"device": dispositivo},
-        encode_kwargs={"prompt": "passage: ", "normalize_embeddings": True},
-        query_encode_kwargs={"prompt": "query: ", "normalize_embeddings": True},
-    )
-
-
-def criar_cliente_qdrant(config: dict) -> QdrantClient:
+def criar_cliente(config: dict) -> QdrantClient:
     """Conecta no Qdrant, ligando o executável antes se for o caso."""
     from qdrant_client import QdrantClient
 
     garantir_qdrant(config)
     return QdrantClient(url=config["qdrant"]["url"])
-
-
-EXE_QDRANT = PASTA_PROJETO / "bin" / "qdrant.exe"
-
-
-def dica_conexao(config: dict) -> str:
-    """Mensagem de ajuda usada quando a conexão com o Qdrant falha."""
-    return "Veja logs/qdrant.log ou rode o instalar.bat de novo."
 
 
 def _qdrant_respondendo(url: str) -> bool:

@@ -2,17 +2,19 @@
 
 import asyncio
 import re
-import time
 from collections import Counter
 
 import httpx
+
+from agente_pesquisa.contrato import ErroEsperado, Resultado
+from agente_pesquisa.fontes.http import LimiteDeTaxa, requisitar
 
 PUBTATOR_API = "https://www.ncbi.nlm.nih.gov/research/pubtator3-api"
 
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 TENTATIVAS = 3
 # O NCBI pede no máximo 3 requisições por segundo.
-INTERVALO_MIN_S = 0.35
+LIMITE = LimiteDeTaxa(0.35)
 
 TIPOS_ENTIDADE = ("gene", "disease", "chemical", "variant")
 TIPOS_RELACAO = (
@@ -33,55 +35,21 @@ MAX_CARACTERES = 20_000
 TIPOS_COM_NOME = {"Gene", "Chemical", "Disease"}
 MAX_ENTIDADES = 15
 
-_trava = asyncio.Lock()
-_ultima_requisicao = 0.0
-
-
-class ErroPubTator(Exception):
-    """Erro "esperado" (API fora, nada encontrado...), com mensagem legível."""
-
-
-async def _aguardar_vez() -> None:
-    """Espaça as requisições, inclusive as feitas em paralelo pelo Claude."""
-    global _ultima_requisicao
-    async with _trava:
-        espera = _ultima_requisicao + INTERVALO_MIN_S - time.monotonic()
-        if espera > 0:
-            await asyncio.sleep(espera)
-        _ultima_requisicao = time.monotonic()
-
-
-async def _get(client: httpx.AsyncClient, caminho: str, params: dict) -> httpx.Response:
-    """GET respeitando o limite de taxa e tentando de novo em falhas temporárias."""
-    for tentativa in range(1, TENTATIVAS + 1):
-        await _aguardar_vez()
-        try:
-            r = await client.get(f"{PUBTATOR_API}{caminho}", params=params)
-            if r.status_code not in (429, 500, 502, 503, 504):
-                return r
-            motivo = f"HTTP {r.status_code}"
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            motivo = type(e).__name__
-        if tentativa < TENTATIVAS:
-            await asyncio.sleep(2 * tentativa)
-
-    raise ErroPubTator(
-        f"O PubTator não respondeu após {TENTATIVAS} tentativas ({motivo}). "
-        "Provavelmente é instabilidade do NCBI; tente de novo em alguns minutos."
-    )
-
 
 async def _consultar(caminho: str, params: dict, erro_400: str | None = None):
-    """Faz a chamada e devolve o JSON, convertendo falhas de rede em ErroPubTator."""
+    """Faz a chamada e devolve o JSON, convertendo falhas de rede em ErroEsperado."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
-            r = await _get(client, caminho, params)
+            r = await requisitar(
+                client, "GET", f"{PUBTATOR_API}{caminho}",
+                servico="PubTator", tentativas=TENTATIVAS, limite=LIMITE, params=params,
+            )
             if r.status_code == 400 and erro_400:
-                raise ErroPubTator(erro_400)
+                raise ErroEsperado(erro_400)
             r.raise_for_status()
             return r.json()
         except httpx.HTTPError as e:
-            raise ErroPubTator(f"Falha ao acessar o PubTator: {type(e).__name__} {e}") from e
+            raise ErroEsperado(f"Falha ao acessar o PubTator: {type(e).__name__} {e}") from e
 
 
 def _legivel(entidade_id: str) -> str:
@@ -95,14 +63,14 @@ def _limpar(texto: str) -> str:
     return " ".join(texto.split())
 
 
-async def buscar_entidades(texto: str, tipo: str | None = None, max_resultados: int = 5) -> str:
+async def buscar_entidades(texto: str, tipo: str | None = None, max_resultados: int = 5) -> Resultado:
     """Lista candidatos a ID do PubTator (ex.: @GENE_TP53) para um nome."""
     params = {"query": texto, "limit": max_resultados}
     if tipo:
         params["concept"] = tipo
     candidatos = await _consultar("/entity/autocomplete/", params)
     if not candidatos:
-        raise ErroPubTator(
+        raise ErroEsperado(
             f"Nenhuma entidade reconhecida para '{texto}'. O PubTator só reconhece genes, "
             "doenças, químicos e variantes; para outros temas (ex.: 'gut microbiome'), "
             "use buscar_artigos com o texto livre."
@@ -114,7 +82,7 @@ async def buscar_entidades(texto: str, tipo: str | None = None, max_resultados: 
         banco = f"{c.get('db')} {c.get('db_id')}" if c.get("db_id") else "-"
         linhas.append(f"- {c['_id']} | {c.get('biotype')} | {c.get('name')} ({banco}) | {como}")
 
-    return (
+    return Resultado(
         f"Candidatos do PubTator para '{texto}'"
         + (f" (tipo: {tipo})" if tipo else "")
         + ". O autocomplete casa por prefixo e sinônimo, então confira se o primeiro é "
@@ -122,12 +90,12 @@ async def buscar_entidades(texto: str, tipo: str | None = None, max_resultados: 
     )
 
 
-async def buscar_artigos(consulta: str, pagina: int = 1) -> str:
+async def buscar_artigos(consulta: str, pagina: int = 1) -> Resultado:
     """Busca artigos no PubTator (10 por página), mais relevantes primeiro."""
     dados = await _consultar("/search/", {"text": consulta, "page": pagina})
     artigos = dados.get("results", [])
     if not artigos:
-        raise ErroPubTator(
+        raise ErroEsperado(
             f"Nenhum artigo encontrado para '{consulta}'"
             + (f" na página {pagina}" if pagina > 1 else "")
             + ". Tente termos em inglês, mais gerais, ou o ID da entidade (buscar_entidade)."
@@ -144,14 +112,14 @@ async def buscar_artigos(consulta: str, pagina: int = 1) -> str:
         f"(página {dados.get('current', pagina)} de {dados.get('total_pages', '?')}). "
         "Artigos marcados com [PMC...] costumam ter texto completo disponível.\n\n"
     )
-    return cab + "\n".join(linhas)
+    return Resultado(cab + "\n".join(linhas))
 
 
-async def ler_artigo(pmid: str | int, texto_completo: bool = False) -> str:
+async def ler_artigo(pmid: str | int, texto_completo: bool = False) -> Resultado:
     """Lê um artigo: seções úteis + resumo das entidades anotadas pelo PubTator."""
     pmid = re.sub(r"\D", "", str(pmid))
     if not pmid:
-        raise ErroPubTator("PMID inválido: informe só o número (ex.: 29355051).")
+        raise ErroEsperado("PMID inválido: informe só o número (ex.: 29355051).")
 
     params = {"pmids": pmid}
     if texto_completo:
@@ -162,7 +130,7 @@ async def ler_artigo(pmid: str | int, texto_completo: bool = False) -> str:
     )
     documentos = dados.get("PubTator3") or []
     if not documentos:
-        raise ErroPubTator(f"PMID {pmid} não encontrado no PubTator.")
+        raise ErroEsperado(f"PMID {pmid} não encontrado no PubTator.")
     doc = documentos[0]
     passages = doc.get("passages", [])
 
@@ -215,7 +183,7 @@ async def ler_artigo(pmid: str | int, texto_completo: bool = False) -> str:
             "Apenas título e resumo foram retornados."
         )
 
-    return "\n\n".join([cab, *pedacos, *avisos])
+    return Resultado("\n\n".join([cab, *pedacos, *avisos]))
 
 
 async def buscar_relacoes(
@@ -223,11 +191,11 @@ async def buscar_relacoes(
     tipo_relacao: str | None = None,
     tipo_alvo: str | None = None,
     max_resultados: int = 15,
-) -> str:
+) -> Resultado:
     """Relações extraídas da literatura (ex.: químicos que tratam uma doença)."""
     entidade = entidade.strip()
     if not entidade.startswith("@"):
-        raise ErroPubTator(
+        raise ErroEsperado(
             f"'{entidade}' não é um ID do PubTator. Use buscar_entidade primeiro para "
             "obter o ID (ex.: @CHEMICAL_Doxorubicin, @GENE_TP53)."
         )
@@ -253,7 +221,7 @@ async def buscar_relacoes(
             if existentes:
                 tipos = ", ".join(f"{t} ({n})" for t, n in existentes.most_common())
                 msg += f" Tipos de relação disponíveis para esse filtro: {tipos}."
-        raise ErroPubTator(msg + " Confira o ID com buscar_entidade ou afrouxe os filtros.")
+        raise ErroEsperado(msg + " Confira o ID com buscar_entidade ou afrouxe os filtros.")
 
     linhas = []
     for r in relacoes[:max_resultados]:
@@ -272,7 +240,7 @@ async def buscar_relacoes(
         "\n\nPara ver os artigos de uma relação, use buscar_artigos com "
         f"'relations:<tipo>|{entidade}|<outro lado>'."
     )
-    return cab + "\n".join(linhas) + rodape
+    return Resultado(cab + "\n".join(linhas) + rodape)
 
 
 if __name__ == "__main__":
@@ -281,9 +249,9 @@ if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
 
     async def _demo():
-        print(await buscar_entidades("p53"), end="\n\n")
-        print(await buscar_artigos("@GENE_TP53 AND breast cancer"), end="\n\n")
-        print((await ler_artigo(29355051))[:1500], end="\n\n")
-        print(await buscar_relacoes("@CHEMICAL_Doxorubicin", "treat", "disease", 5))
+        print((await buscar_entidades("p53")).texto, end="\n\n")
+        print((await buscar_artigos("@GENE_TP53 AND breast cancer")).texto, end="\n\n")
+        print((await ler_artigo(29355051)).texto[:1500], end="\n\n")
+        print((await buscar_relacoes("@CHEMICAL_Doxorubicin", "treat", "disease", 5)).texto)
 
     asyncio.run(_demo())

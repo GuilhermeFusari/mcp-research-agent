@@ -5,6 +5,9 @@ import re
 
 import httpx
 
+from agente_pesquisa.contrato import ErroEsperado, Resultado
+from agente_pesquisa.fontes.http import requisitar
+
 UNIPROT_API = "https://rest.uniprot.org/uniprotkb"
 
 PEPTIDE_API = "https://peptidesearch.uniprot.org/asyncrest"
@@ -33,30 +36,6 @@ MIN_TAM_NUCLEOTIDEO = 12
 TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 TENTATIVAS = 2
 PEPTIDE_ESPERA_MAX_S = 60
-
-
-class ErroUniProt(Exception):
-    """Erro "esperado" (API fora, nada encontrado...), com mensagem legível."""
-
-
-async def _requisicao(client: httpx.AsyncClient, metodo: str, url: str, **kwargs) -> httpx.Response:
-    """Faz a requisição HTTP tentando de novo em falhas temporárias."""
-    for tentativa in range(1, TENTATIVAS + 1):
-        try:
-            r = await client.request(metodo, url, **kwargs)
-            if r.status_code not in (429, 500, 502, 503, 504):
-                return r
-            motivo = f"HTTP {r.status_code}"
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            motivo = type(e).__name__
-        if tentativa < TENTATIVAS:
-            await asyncio.sleep(2 * tentativa)
-
-    servico = "Peptide Search" if "peptidesearch" in url else "UniProt"
-    raise ErroUniProt(
-        f"O serviço {servico} não respondeu após {TENTATIVAS} tentativas ({motivo}). "
-        "Provavelmente é instabilidade do lado deles; tente de novo em alguns minutos."
-    )
 
 
 def limpar_sequencia(texto: str) -> str:
@@ -155,7 +134,10 @@ async def buscar_por_nome(
                 "format": "json",
                 "size": max_resultados,
             }
-            r = await _requisicao(client, "GET", f"{UNIPROT_API}/search", params=params)
+            r = await requisitar(
+                client, "GET", f"{UNIPROT_API}/search",
+                servico="UniProt", tentativas=TENTATIVAS, params=params,
+            )
             r.raise_for_status()
             resultados = r.json().get("results", [])
             if resultados:
@@ -164,7 +146,7 @@ async def buscar_por_nome(
             break
 
     if not resultados:
-        raise ErroUniProt(f"Nenhuma proteína encontrada para '{consulta}'.")
+        raise ErroEsperado(f"Nenhuma proteína encontrada para '{consulta}'.")
 
     cab = f"Resultados do UniProt para '{consulta}' (busca por nome/gene/ID):\n\n"
     return cab + "\n\n".join(_formatar_entrada(e) for e in resultados)
@@ -175,37 +157,41 @@ async def buscar_por_peptideo(
 ) -> str:
     """Encontra proteínas que CONTÊM exatamente a sequência (Peptide Search)."""
     if len(sequencia) < MIN_TAM_PEPTIDEO:
-        raise ErroUniProt(
+        raise ErroEsperado(
             f"Sequência curta demais ({len(sequencia)} aa). Peptídeos com menos de "
             f"{MIN_TAM_PEPTIDEO} aminoácidos aparecem em milhões de proteínas, então a "
             "busca não é informativa. Use uma sequência maior ou busque por nome/gene."
         )
 
-    r = await _requisicao(
+    r = await requisitar(
         client, "POST", f"{PEPTIDE_API}/",
+        servico="Peptide Search", tentativas=TENTATIVAS,
         data={"peps": sequencia, "lEQi": "off", "spOnly": "off"},
     )
     if r.status_code != 202 or "Location" not in r.headers:
-        raise ErroUniProt(f"Peptide Search recusou o pedido (HTTP {r.status_code}).")
+        raise ErroEsperado(f"Peptide Search recusou o pedido (HTTP {r.status_code}).")
 
     url_job = r.headers["Location"].replace("http://", "https://", 1)
 
     # Job assíncrono: 303 = ainda processando, 200 = pronto (lista de IDs).
     espera = 0
     while True:
-        r = await _requisicao(client, "GET", url_job, follow_redirects=False)
+        r = await requisitar(
+            client, "GET", url_job,
+            servico="Peptide Search", tentativas=TENTATIVAS, follow_redirects=False,
+        )
         if r.status_code == 200:
             break
         if r.status_code != 303:
-            raise ErroUniProt(f"Erro no job do Peptide Search (HTTP {r.status_code}).")
+            raise ErroEsperado(f"Erro no job do Peptide Search (HTTP {r.status_code}).")
         if espera >= PEPTIDE_ESPERA_MAX_S:
-            raise ErroUniProt("Peptide Search demorou demais. Tente novamente mais tarde.")
+            raise ErroEsperado("Peptide Search demorou demais. Tente novamente mais tarde.")
         await asyncio.sleep(2)
         espera += 2
 
     ids = [i.strip() for i in r.text.split(",") if i.strip()]
     if not ids:
-        raise ErroUniProt(
+        raise ErroEsperado(
             f"Nenhuma proteína do UniProt contém exatamente a sequência {sequencia}. "
             "O Peptide Search só encontra correspondências exatas. Para sequências "
             "parecidas (não idênticas), seria preciso BLAST (ainda não implementado)."
@@ -217,15 +203,21 @@ async def buscar_por_peptideo(
             "query": f"({consulta_ids}) AND (organism_name:\"{organismo}\")",
             "fields": CAMPOS, "format": "json", "size": max_resultados,
         }
-        r = await _requisicao(client, "GET", f"{UNIPROT_API}/search", params=params)
+        r = await requisitar(
+                client, "GET", f"{UNIPROT_API}/search",
+                servico="UniProt", tentativas=TENTATIVAS, params=params,
+            )
     else:
         params = {"accessions": ",".join(ids[:max_resultados]), "fields": CAMPOS, "format": "json"}
-        r = await _requisicao(client, "GET", f"{UNIPROT_API}/accessions", params=params)
+        r = await requisitar(
+            client, "GET", f"{UNIPROT_API}/accessions",
+            servico="UniProt", tentativas=TENTATIVAS, params=params,
+        )
     r.raise_for_status()
     resultados = r.json().get("results", [])
 
     if not resultados:
-        raise ErroUniProt(
+        raise ErroEsperado(
             f"A sequência aparece em {len(ids)} proteína(s), mas nenhuma de '{organismo}'. "
             "Pode ser que nesse organismo a sequência tenha alguma diferença "
             "(a busca é exata). Tente sem o filtro de organismo."
@@ -240,13 +232,13 @@ async def buscar_por_peptideo(
 
 async def buscar(
     consulta: str, tipo: str = "auto", organismo: str | None = None, max_resultados: int = 5
-) -> str:
-    """Decide o tipo de busca e executa."""
+) -> Resultado:
+    """Decide o tipo de busca (nome ou sequência) e executa."""
     if tipo == "auto":
         tipo = detectar_tipo(consulta)
 
     if tipo == "nucleotideo":
-        raise ErroUniProt(
+        raise ErroEsperado(
             "Isso parece uma sequência de DNA/RNA. O UniProt é um banco de proteínas; "
             "traduza para aminoácidos primeiro (ou use tipo='sequencia' se for mesmo proteína)."
         )
@@ -254,12 +246,12 @@ async def buscar(
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             if tipo in ("peptideo", "sequencia"):
-                return await buscar_por_peptideo(
+                return Resultado(await buscar_por_peptideo(
                     client, limpar_sequencia(consulta), organismo, max_resultados
-                )
-            return await buscar_por_nome(client, consulta.strip(), organismo, max_resultados)
+                ))
+            return Resultado(await buscar_por_nome(client, consulta.strip(), organismo, max_resultados))
         except httpx.HTTPError as e:
-            raise ErroUniProt(f"Falha ao acessar o UniProt: {type(e).__name__} {e}") from e
+            raise ErroEsperado(f"Falha ao acessar o UniProt: {type(e).__name__} {e}") from e
 
 
 if __name__ == "__main__":
@@ -267,4 +259,4 @@ if __name__ == "__main__":
 
     sys.stdout.reconfigure(encoding="utf-8")
     termo = " ".join(sys.argv[1:]) or "insulin"
-    print(asyncio.run(buscar(termo)))
+    print(asyncio.run(buscar(termo)).texto)

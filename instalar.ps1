@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Projeto = $PSScriptRoot
+Set-Location $Projeto
 $Venv    = Join-Path $Projeto ".venv"
 $Py      = Join-Path $Venv "Scripts\python.exe"
 
@@ -75,11 +76,11 @@ if (Test-Path $Exe) {
     Remove-Item $zip
     Write-Host "Hash conferido; qdrant.exe instalado em bin\."
 }
-& $Py -c "import rag; rag.garantir_qdrant(rag.carregar_config()); print('Qdrant rodando.')"
+& $Py -c "from agente_pesquisa.config import carregar_config; from agente_pesquisa.biblioteca.qdrant import garantir_qdrant; garantir_qdrant(carregar_config()); print('Qdrant rodando.')"
 if ($LASTEXITCODE -ne 0) { Falha "Não consegui iniciar o Qdrant. Veja logs\qdrant.log." }
 
 Passo "5/6 Baixando o modelo de embeddings (~1 GB, só na 1ª vez)"
-& $Py -c "import rag; rag.criar_embeddings(rag.carregar_config()).embed_query('teste'); print('Modelo pronto.')"
+& $Py -c "from agente_pesquisa.config import carregar_config; from agente_pesquisa.biblioteca.embeddings import criar_embeddings; criar_embeddings(carregar_config()).embed_query('teste'); print('Modelo pronto.')"
 if ($LASTEXITCODE -ne 0) { Falha "Não consegui baixar o modelo (sem internet?)." }
 
 Passo "6/6 Registrando no Claude Desktop"
