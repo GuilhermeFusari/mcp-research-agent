@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-research-agent"
+version = "1.2.0"
+description = "MCP server for molecular biology research: UniProt, BLAST (EBI), STRING interactions and PubMed literature via PubTator3, with optional semantic search over local PDFs."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "GuilhermeFusari" }]
+keywords = ["mcp", "bioinformatics", "uniprot", "blast", "string-db", "pubmed", "claude"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+# Núcleo leve: só o necessário para as ferramentas web (UniProt, BLAST, STRING, PubTator).
+dependencies = [
+    "mcp>=2.2,<3",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Busca semântica nos PDFs locais (pesado: PyTorch, modelo de ~1 GB, Qdrant).
+# Hoje o Qdrant embutido só é gerenciado no Windows (instalar.bat).
+pdfs = [
+    "langchain-core>=1.0",
+    "langchain-huggingface>=1.0",
+    "langchain-qdrant>=1.0",
+    "langchain-text-splitters>=1.0",
+    "qdrant-client>=1.12",
+    "sentence-transformers>=3.0",
+    "torch>=2.4",
+    "pymupdf>=1.24",
+    "easyocr>=1.7",
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+]
+
+[project.scripts]
+mcp-research-agent = "agente_pesquisa.ferramentas:main"
+agente-pesquisa-indexar = "agente_pesquisa.biblioteca.indexador:main"
+
+[project.urls]
+Repository = "https://github.com/GuilhermeFusari/mcp-research-agent"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agente_pesquisa"]
+
+[tool.hatch.build.targets.sdist]
+include = ["agente_pesquisa", "README.md", "LICENSE", "config.exemplo.toml", "skill"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

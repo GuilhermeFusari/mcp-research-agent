@@ -6,7 +6,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from agente_pesquisa.config import PASTA_PROJETO
+from agente_pesquisa.config import PASTA_DADOS, PASTA_PROJETO
 
 # Importação pesada fica dentro da função: o servidor MCP precisa iniciar rápido.
 if TYPE_CHECKING:
@@ -58,11 +58,11 @@ def garantir_qdrant(config: dict) -> None:
         QDRANT__SERVICE__HOST="127.0.0.1",
         QDRANT__SERVICE__HTTP_PORT=str(porta),
         QDRANT__SERVICE__GRPC_PORT=str(porta + 1),
-        QDRANT__STORAGE__STORAGE_PATH=str(PASTA_PROJETO / "qdrant_data"),
+        QDRANT__STORAGE__STORAGE_PATH=str(PASTA_DADOS / "qdrant_data"),
         QDRANT__TELEMETRY_DISABLED="true",
     )
-    pasta_logs = PASTA_PROJETO / "logs"
-    pasta_logs.mkdir(exist_ok=True)
+    pasta_logs = PASTA_DADOS / "logs"
+    pasta_logs.mkdir(parents=True, exist_ok=True)
 
     log.info("Ligando o Qdrant em segundo plano...")
     flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
