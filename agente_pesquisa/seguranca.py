@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 
-from agente_pesquisa.config import PASTA_PROJETO
+from agente_pesquisa.config import PASTA_DADOS
 
 
 NIVEIS = {"publico": 0, "interno": 1, "confidencial": 2}
@@ -77,7 +77,7 @@ def mascarar(texto: str) -> tuple[str, dict[str, int]]:
     return texto, contagem
 
 
-PASTA_LOGS = PASTA_PROJETO / "logs"
+PASTA_LOGS = PASTA_DADOS / "logs"
 
 
 def registrar(ferramenta: str, argumentos: dict, saida: str, cfg_seg: dict, **extra) -> None:
@@ -95,6 +95,6 @@ def registrar(ferramenta: str, argumentos: dict, saida: str, cfg_seg: dict, **ex
     if cfg_seg.get("auditoria_salvar_texto", False):
         registro["saida"] = saida
 
-    PASTA_LOGS.mkdir(exist_ok=True)
+    PASTA_LOGS.mkdir(parents=True, exist_ok=True)
     with open(PASTA_LOGS / "auditoria.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(registro, ensure_ascii=False) + "\n")

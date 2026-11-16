@@ -6,6 +6,7 @@ o caminho único que faz log, auditoria e conversão de erro.
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
 import threading
@@ -20,40 +21,43 @@ from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 from mcp.types import ToolAnnotations  # noqa: E402
 
 from agente_pesquisa import seguranca  # noqa: E402
-from agente_pesquisa.biblioteca import busca  # noqa: E402
 from agente_pesquisa.config import carregar_config  # noqa: E402
 from agente_pesquisa.contrato import ErroEsperado, Resultado  # noqa: E402
-from agente_pesquisa.fontes import pubtator, uniprot  # noqa: E402
+from agente_pesquisa.fontes import blast, pubtator, string_db, uniprot  # noqa: E402
 
 # Logs vão para o stderr: o stdout é o canal do protocolo MCP (nunca use print aqui).
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("agente-pesquisa")
 
-CFG_SEG = carregar_config().get("seguranca", {})
+CONFIG = carregar_config()
+CFG_SEG = CONFIG.get("seguranca", {})
+
+# A busca em PDFs só liga na instalação completa (config.toml com [qdrant] e as
+# dependências do extra [pdfs]). No pacote leve, só as ferramentas web existem.
+PDFS_ATIVOS = "qdrant" in CONFIG and importlib.util.find_spec("langchain_qdrant") is not None
 
 # Todas as ferramentas só leem: nada é criado, alterado ou apagado.
-# Os PDFs são locais (mundo fechado); UniProt e PubTator são APIs públicas.
+# Os PDFs são locais (mundo fechado); as demais fontes são APIs públicas.
 SO_LEITURA_LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 SO_LEITURA_WEB = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 
-mcp = MCPServer(
-    name="agente-pesquisa",
-    instructions=(
-        "Assistente de pesquisa científica com fontes verificáveis. REGRAS: "
-        "(1) Sempre que a conversa mencionar uma proteína, peptídeo, gene ou "
-        "sequência de aminoácidos, consulte buscar_proteina ANTES de responder, "
-        "mesmo que você já conheça o assunto: os dados do UniProt são mais "
-        "atuais e citáveis. "
-        "(2) Para perguntas científicas ou técnicas, use também buscar_pdfs para "
-        "verificar se a biblioteca local do usuário tem algo relevante, e cite "
-        "arquivo e página. "
-        "(3) Quando a pergunta mencionar literatura, estudos, evidências ou relações "
-        "entre genes, doenças e fármacos (o que trata, causa, inibe...), consulte o "
-        "PubMed com buscar_artigos, ler_artigo e buscar_relacoes ANTES de responder, "
-        "mesmo que você já conheça o assunto, e cite os PMIDs. "
-        "(4) Deixe claro o que veio das ferramentas e o que é conhecimento geral."
-    ),
+INSTRUCOES = (
+    "Ferramentas de pesquisa em biologia molecular com fontes verificáveis: UniProt "
+    "(proteínas), BLAST do EBI (sequências parecidas), STRING (interações) e PubMed via "
+    "PubTator3 (literatura). Use-as quando a pergunta for sobre biologia, bioquímica ou "
+    "biomedicina e pedir fatos que precisam ser atuais ou citáveis: função ou estrutura de "
+    "uma proteína, identidade de uma sequência, parceiros de interação, evidências na "
+    "literatura. Não use só porque um nome de gene aparece de passagem (ex.: em código ou "
+    "nomes de variáveis). Cite UniProt IDs e PMIDs e deixe claro o que veio das "
+    "ferramentas e o que é conhecimento geral."
 )
+if PDFS_ATIVOS:
+    INSTRUCOES += (
+        " Para perguntas científicas, verifique também a biblioteca local de PDFs do "
+        "usuário (buscar_pdfs) e cite arquivo e página."
+    )
+
+mcp = MCPServer(name="agente-pesquisa", instructions=INSTRUCOES)
 
 
 async def _executar(ferramenta: str, argumentos: dict, operacao: Awaitable[Resultado]) -> str:
@@ -78,9 +82,9 @@ async def buscar_proteina(
     """Busca proteínas e peptídeos no UniProt e retorna função, organismo,
     localização celular e estruturas (PDB/AlphaFold).
 
-    Use SEMPRE que o usuário mencionar uma proteína, peptídeo, gene ou
-    sequência, mesmo sem pedir explicitamente, e mesmo que você já conheça
-    o assunto. Prefira os dados daqui ao seu conhecimento prévio.
+    Use quando a pergunta depender de dados de uma proteína (função, organismo,
+    localização, estrutura) ou de identificar uma sequência. Prefira os dados
+    daqui ao conhecimento prévio: são atuais e citáveis.
 
     Aceita:
     - nome de proteína ou gene (ex.: "insulin", "TP53", "hemoglobin beta");
@@ -103,36 +107,44 @@ async def buscar_proteina(
     )
 
 
-@mcp.tool(annotations=SO_LEITURA_LOCAL)
-async def buscar_pdfs(pergunta: str, k: int = 5, arquivo: str | None = None) -> str:
-    """Busca semântica nos PDFs científicos locais do usuário (artigos, livros,
-    apostilas). Encontra trechos pelo SIGNIFICADO, não só por palavra exata,
-    e funciona entre idiomas (pergunta em português acha texto em inglês).
+def _busca():
+    """Importa a busca em PDFs só quando ela está ativa (dependências pesadas)."""
+    from agente_pesquisa.biblioteca import busca
 
-    Use SEMPRE que o usuário fizer uma pergunta científica ou técnica, mesmo
-    sem mencionar os PDFs: a biblioteca pessoal dele pode ter material
-    relevante. Cada trecho vem com arquivo e página: cite-os na resposta.
-
-    Args:
-        pergunta: o que procurar, em linguagem natural (ex.: "mecanismo de
-            ação de peptídeos antimicrobianos").
-        k: quantos trechos retornar (1 a 15). Aumente para temas amplos.
-        arquivo: opcional, restringe a busca a PDFs cujo nome contém este texto.
-    """
-    k = max(1, min(k, 15))
-    # A busca roda o modelo na CPU: em outra thread, o servidor não trava enquanto isso.
-    return await _executar(
-        "buscar_pdfs", {"pergunta": pergunta, "k": k, "arquivo": arquivo},
-        asyncio.to_thread(busca.buscar, pergunta, k, arquivo),
-    )
+    return busca
 
 
-@mcp.tool(annotations=SO_LEITURA_LOCAL)
-async def listar_pdfs() -> str:
-    """Lista os nomes dos PDFs indexados na biblioteca local do usuário.
-    Útil para saber o que existe antes de buscar, ou para achar o nome de
-    um arquivo e usá-lo no filtro 'arquivo' de buscar_pdfs."""
-    return await _executar("listar_pdfs", {}, asyncio.to_thread(busca.listar_arquivos))
+if PDFS_ATIVOS:
+    @mcp.tool(annotations=SO_LEITURA_LOCAL)
+    async def buscar_pdfs(pergunta: str, k: int = 5, arquivo: str | None = None) -> str:
+        """Busca semântica nos PDFs científicos locais do usuário (artigos, livros,
+        apostilas). Encontra trechos pelo SIGNIFICADO, não só por palavra exata,
+        e funciona entre idiomas (pergunta em português acha texto em inglês).
+
+        Use em perguntas científicas ou técnicas, mesmo sem o usuário mencionar
+        os PDFs: a biblioteca pessoal dele pode ter material relevante. Cada
+        trecho vem com arquivo e página: cite-os na resposta.
+
+        Args:
+            pergunta: o que procurar, em linguagem natural (ex.: "mecanismo de
+                ação de peptídeos antimicrobianos").
+            k: quantos trechos retornar (1 a 15). Aumente para temas amplos.
+            arquivo: opcional, restringe a busca a PDFs cujo nome contém este texto.
+        """
+        k = max(1, min(k, 15))
+        # A busca roda o modelo na CPU: em outra thread, o servidor não trava enquanto isso.
+        return await _executar(
+            "buscar_pdfs", {"pergunta": pergunta, "k": k, "arquivo": arquivo},
+            asyncio.to_thread(_busca().buscar, pergunta, k, arquivo),
+        )
+
+
+    @mcp.tool(annotations=SO_LEITURA_LOCAL)
+    async def listar_pdfs() -> str:
+        """Lista os nomes dos PDFs indexados na biblioteca local do usuário.
+        Útil para saber o que existe antes de buscar, ou para achar o nome de
+        um arquivo e usá-lo no filtro 'arquivo' de buscar_pdfs."""
+        return await _executar("listar_pdfs", {}, asyncio.to_thread(_busca().listar_arquivos))
 
 
 @mcp.tool(annotations=SO_LEITURA_WEB)
@@ -249,10 +261,74 @@ async def buscar_relacoes(
     )
 
 
+@mcp.tool(annotations=SO_LEITURA_WEB)
+async def buscar_similares(
+    sequencia: str,
+    banco: Literal["swissprot", "uniprot", "pdb"] = "swissprot",
+    max_resultados: int = 10,
+    evalue_max: float = 1e-3,
+) -> str:
+    """BLAST de proteína (blastp, serviço do EBI): encontra proteínas com
+    sequência PARECIDA, não só idêntica, com identidade, cobertura e e-value.
+
+    Use para identificar uma sequência desconhecida, achar homólogos em outros
+    organismos ou quando buscar_proteina não encontrou correspondência exata.
+    Leva de 20 s a alguns minutos (o job roda na fila do EBI).
+
+    Args:
+        sequencia: aminoácidos em código de 1 letra, com ou sem cabeçalho FASTA
+            (mínimo 10 aa).
+        banco: "swissprot" (revisadas, rápido, padrão), "uniprot" (tudo, lento)
+            ou "pdb" (só proteínas com estrutura experimental).
+        max_resultados: quantos alinhamentos retornar (1 a 50).
+        evalue_max: corte de e-value; menor = mais rigoroso.
+    """
+    max_resultados = max(1, min(max_resultados, 50))
+    return await _executar(
+        "buscar_similares",
+        {"tamanho": len(sequencia), "banco": banco, "max_resultados": max_resultados,
+         "evalue_max": evalue_max},
+        blast.buscar_similares(sequencia, banco, max_resultados, evalue_max),
+    )
+
+
+@mcp.tool(annotations=SO_LEITURA_WEB)
+async def buscar_interacoes(
+    proteinas: list[str],
+    organismo: str | None = None,
+    max_resultados: int = 15,
+    score_minimo: float = 0.7,
+) -> str:
+    """Interações proteína-proteína do STRING, com score de confiança e os
+    canais de evidência (experimentos, bancos curados, mineração de texto...).
+
+    - Uma proteína: lista os parceiros mais confiáveis (ex.: ["GRB2"]).
+    - Várias: mostra a rede de interações entre elas (ex.: ["GRB2", "SOS1", "FGFR2"]).
+
+    Use quando perguntarem com quem uma proteína interage, em que complexo ou
+    via ela atua, ou se duas proteínas se ligam. Interação no STRING pode ser
+    funcional, não necessariamente contato físico: confira o canal de evidência.
+
+    Args:
+        proteinas: nomes de gene/proteína ou IDs do UniProt (até 50).
+        organismo: nome ("human", "mouse", "yeast"...) ou ID de táxon do NCBI.
+            Padrão: humano (9606).
+        max_resultados: quantas interações mostrar (1 a 100).
+        score_minimo: confiança mínima de 0 a 1 (0.4 média, 0.7 alta, 0.9 muito alta).
+    """
+    max_resultados = max(1, min(max_resultados, 100))
+    return await _executar(
+        "buscar_interacoes",
+        {"proteinas": proteinas, "organismo": organismo, "max_resultados": max_resultados,
+         "score_minimo": score_minimo},
+        string_db.buscar_interacoes(proteinas, organismo, max_resultados, score_minimo),
+    )
+
+
 def _pre_carregar() -> None:
     """Carrega modelo e banco em segundo plano, para a 1ª busca não esperar ~1 min."""
     try:
-        busca._pronto()
+        _busca()._pronto()
         log.info("Busca em PDFs pronta (pré-carregada).")
     except Exception as e:
         log.info("Pré-carregamento adiado: %s", e)
@@ -260,7 +336,10 @@ def _pre_carregar() -> None:
 
 def main() -> None:
     """Inicia o servidor (stdio) e pré-carrega a busca em PDFs em segundo plano."""
-    threading.Thread(target=_pre_carregar, daemon=True).start()
+    if PDFS_ATIVOS:
+        threading.Thread(target=_pre_carregar, daemon=True).start()
+    else:
+        log.info("Modo leve: busca em PDFs desativada (sem config.toml com [qdrant]).")
     mcp.run(transport="stdio")
 
 

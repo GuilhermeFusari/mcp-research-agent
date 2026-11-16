@@ -1,12 +1,16 @@
 # MCP Research Agent
 
-Servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) que dá ao **Claude Desktop** três capacidades de pesquisa científica:
+[![testes](https://github.com/GuilhermeFusari/mcp-research-agent/actions/workflows/testes.yml/badge.svg)](https://github.com/GuilhermeFusari/mcp-research-agent/actions/workflows/testes.yml)
+
+Servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) que dá ao Claude (Desktop ou Code), ao Cursor e a outros clientes MCP estas capacidades de pesquisa científica:
 
 - 🧬 **Proteínas e peptídeos**: consulta o [UniProt](https://www.uniprot.org) por nome, gene, ID ou sequência de aminoácidos e retorna função, localização celular e estruturas (PDB/AlphaFold).
+- 🔎 **Sequências parecidas (BLAST)**: roda blastp no [EBI](https://www.ebi.ac.uk/jdispatcher/sss/ncbiblast) para achar homólogos, com identidade, cobertura e e-value.
+- 🕸️ **Interações proteína-proteína**: consulta o [STRING](https://string-db.org) para listar parceiros de uma proteína ou a rede entre várias, com score de confiança e canais de evidência.
 - 📰 **Literatura científica**: busca e lê artigos do PubMed pelo [PubTator3](https://www.ncbi.nlm.nih.gov/research/pubtator3/) (NCBI/NIH), com genes, doenças e químicos já anotados, e consulta relações extraídas de toda a literatura (ex.: que doenças um fármaco trata), citando PMIDs.
-- 📚 **Biblioteca pessoal de PDFs**: busca semântica (RAG) nos PDFs do seu computador, **em português e inglês**, inclusive PDFs escaneados (OCR), com citação de arquivo e página.
+- 📚 **Biblioteca pessoal de PDFs** (opcional, instalação completa no Windows): busca semântica (RAG) nos PDFs do seu computador, **em português e inglês**, inclusive PDFs escaneados (OCR), com citação de arquivo e página.
 
-Roda no Windows. Os PDFs, o índice vetorial e o modelo de embeddings nunca saem da máquina: só os trechos relevantes de cada busca vão para o Claude, e passam por uma camada de segurança antes disso. As consultas de proteínas e de literatura vão para as APIs públicas do UniProt e do NCBI, levando apenas o termo pesquisado.
+As ferramentas web rodam em qualquer sistema com um comando (`uvx`, veja [Instalação rápida](#instalação-rápida-qualquer-sistema)). A busca em PDFs exige a instalação completa no Windows. Os PDFs, o índice vetorial e o modelo de embeddings nunca saem da máquina: só os trechos relevantes de cada busca vão para o Claude, e passam por uma camada de segurança antes disso. As consultas de proteínas, interações e literatura vão para as APIs públicas do UniProt, EBI, STRING e NCBI, levando apenas o termo ou a sequência pesquisada.
 
 ```
 Você:   O que meus artigos dizem sobre como peptídeos antimicrobianos matam bactérias?
@@ -46,8 +50,12 @@ Claude: [usa buscar_entidade e buscar_relacoes] A relação mais sustentada é c
 | Ferramenta | O que faz |
 |---|---|
 | `buscar_proteina` | Busca no UniProt. Um **roteador** detecta o tipo da entrada: nome/gene/ID → busca textual priorizando entradas revisadas (Swiss-Prot); sequência → Peptide Search (correspondência exata); DNA/RNA → recusa com explicação. |
+| `buscar_similares` | BLAST (blastp) no EBI: proteínas com sequência **parecida**, não só idêntica. Bancos `swissprot` (padrão, rápido), `uniprot` (completo, lento) ou `pdb`. Mostra identidade, cobertura e e-value do melhor alinhamento e avisa sobre a "zona crepuscular" de identidade baixa. |
+| `buscar_interacoes` | STRING: com uma proteína, lista os parceiros mais confiáveis; com várias, a rede entre elas. Mostra o score combinado e os canais de evidência mais fortes (experimentos, bancos curados, mineração de texto...). Organismo por nome ou táxon do NCBI (padrão: humano). |
 | `buscar_pdfs` | Busca semântica nos PDFs locais. Encontra trechos pelo **significado**, não por palavra exata, e funciona entre idiomas (pergunta em PT encontra texto em EN). Filtro opcional por nome de arquivo. |
 | `listar_pdfs` | Lista os PDFs indexados (nomes e nº de trechos), ocultando os confidenciais. |
+
+`buscar_pdfs` e `listar_pdfs` só aparecem na instalação completa (com `config.toml` e as dependências do extra `[pdfs]`). No pacote leve, o servidor expõe só as ferramentas web.
 | `buscar_entidade` | Converte um nome ("p53", "doxorubicin") no ID normalizado do PubTator (`@GENE_TP53`), que encontra todos os sinônimos. Mostra os candidatos para o Claude conferir a ambiguidade. |
 | `buscar_artigos` | Busca no PubMed por texto livre, IDs de entidade (combináveis com AND/OR) ou relações. Retorna PMID, ano, revista e título, 10 por página. |
 | `ler_artigo` | Lê um artigo pelo PMID: resumo ou, para artigos do PMC Open Access, resultados e discussão. Termina com um resumo das entidades anotadas e avisa quando o texto completo não existe. |
@@ -79,6 +87,8 @@ flowchart LR
 
         subgraph FON["fontes/ · gateways"]
             U["uniprot.py"]
+            BL["blast.py"]
+            ST["string_db.py"]
             PT["pubtator.py"]
             H["http.py<br/>retry · limite de taxa"]
         end
@@ -90,8 +100,8 @@ flowchart LR
             I["indexador.py<br/>pipeline"]
         end
 
-        F --> U & PT & B
-        U & PT --> H
+        F --> U & BL & ST & PT & B
+        U & BL & ST & PT --> H
         F --> SEG["seguranca.py"]
         B --> SEG
         B --> E & Q
@@ -99,7 +109,7 @@ flowchart LR
         P["📄 PDFs locais"] --> I
         Q <--> DB[("Qdrant")]
     end
-    H <-->|HTTPS| APIS["🌐 UniProt · PubTator3 (NCBI)"]
+    H <-->|HTTPS| APIS["🌐 UniProt · EBI · STRING · PubTator3 (NCBI)"]
     CD <-->|"trechos selecionados"| C["☁️ Claude"]
 ```
 
@@ -249,18 +259,47 @@ Outras medidas: o banco escuta só em `127.0.0.1` (inacessível pela rede), a te
 
 ## Instalação
 
-### Requisitos (Windows)
+### Instalação rápida (qualquer sistema)
+
+Instala só as ferramentas web (UniProt, BLAST, STRING e PubMed), sem PyTorch nem banco vetorial. Precisa do [uv](https://docs.astral.sh/uv/getting-started/installation/) e de um e-mail de contato (o EBI exige um para rodar BLAST).
+
+**Claude Code:**
+
+```bash
+claude mcp add research-agent -e AGENTE_PESQUISA_EMAIL=voce@exemplo.com -- \
+  uvx --from git+https://github.com/GuilhermeFusari/mcp-research-agent mcp-research-agent
+```
+
+**Claude Desktop, Cursor e outros clientes** (no JSON de configuração de servidores MCP):
+
+```json
+{
+  "mcpServers": {
+    "research-agent": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/GuilhermeFusari/mcp-research-agent", "mcp-research-agent"],
+      "env": { "AGENTE_PESQUISA_EMAIL": "voce@exemplo.com" }
+    }
+  }
+}
+```
+
+O log de auditoria fica em `~/.agente-pesquisa/logs/` (mude com a variável `AGENTE_PESQUISA_HOME`). A pasta [`skill/`](skill/SKILL.md) tem uma skill que ensina o agente quando e como usar cada ferramenta.
+
+### Instalação completa no Windows (com busca em PDFs)
+
+#### Requisitos
 
 1. [Python 3.12+](https://www.python.org/downloads/) (marque **"Add python.exe to PATH"**)
 2. [Claude Desktop](https://claude.ai/download)
 
 Docker **não** é necessário.
 
-### Download
+#### Download
 
 ⬇️ **[Baixar a versão mais recente](https://github.com/GuilhermeFusari/mcp-research-agent/releases/latest)**: em *Assets*, clique em **Source code (zip)**.
 
-### Passos
+#### Passos
 
 1. Extraia o zip num lugar fixo (ex.: `C:\Projetos\mcp-research-agent`). **Não mova depois**: o Claude Desktop guarda o caminho.
 2. Dê **duplo clique em `instalar.bat`**. Se o Windows mostrar *"O Windows protegeu o computador"* (acontece com qualquer script baixado da internet), clique em **Mais informações → Executar assim mesmo**. A primeira vez leva ~10 minutos (~1,5 GB entre bibliotecas e modelo).
@@ -333,6 +372,13 @@ python -m agente_pesquisa.fontes.pubtator
 python -m agente_pesquisa.biblioteca.busca "mecanismo de ação de peptídeos"
 ```
 
+Os testes automatizados simulam as APIs (não precisam de rede) e rodam no GitHub Actions em Windows, macOS e Linux:
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
 E o servidor pode ser inspecionado com o [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
 ```bash
@@ -361,6 +407,9 @@ Mudou `[seguranca]`? Reinicie o Claude Desktop. Mudou pastas ou chunking? Rode o
 ## Estrutura do projeto
 
 ```
+pyproject.toml            pacote (núcleo leve + extra [pdfs]); comando mcp-research-agent
+skill/SKILL.md            skill que ensina o agente a usar as ferramentas
+tests/                    testes com as APIs simuladas (pytest + respx)
 servidor.py               ponto de entrada do servidor MCP (o Claude Desktop executa este)
 indexar.py                ponto de entrada do indexador de PDFs
 registrar_claude.py       registra/remove o servidor no config do Claude Desktop
@@ -374,6 +423,8 @@ agente_pesquisa/
 ├── fontes/               GATEWAYS: um cliente por API externa
 │   ├── http.py           retry com backoff + limite de taxa (compartilhado)
 │   ├── uniprot.py        roteador de entrada, busca textual, Peptide Search
+│   ├── blast.py          BLAST de proteína no EBI (job assíncrono)
+│   ├── string_db.py      interações proteína-proteína (STRING)
 │   └── pubtator.py       entidades, busca e leitura de artigos, relações
 └── biblioteca/           RAG LOCAL
     ├── indexador.py      pipeline: PDF → texto/OCR → chunks → embeddings → Qdrant
@@ -388,8 +439,9 @@ agente_pesquisa/
 
 **Limitações conhecidas**
 
-- Só Windows (instalador, caminhos e Qdrant sidecar).
-- A busca por sequência é **exata**: sequências parecidas, mas não idênticas, não são encontradas.
+- A busca em PDFs só funciona no Windows (instalador, caminhos e Qdrant sidecar). As ferramentas web rodam em qualquer sistema.
+- O BLAST roda na fila pública do EBI: costuma levar de 20 s a alguns minutos, e o banco `uniprot` completo é bem mais lento que o `swissprot`.
+- As interações do STRING incluem associações funcionais e por mineração de texto, não só contato físico; os canais de evidência mostrados ajudam a separar.
 - OCR na CPU é lento (~1 min por página densa); com GPU NVIDIA + PyTorch CUDA fica bem mais rápido (detectado automaticamente).
 - As anotações e relações do PubTator são extraídas por IA e erram, principalmente com nomes curtos que também são palavras comuns (o gene CAT traz artigos sobre gatos). Os nºs de artigos ajudam a separar evidência de ruído.
 - Texto completo de artigos só existe para o PMC Open Access; nos demais, só o resumo (a ferramenta avisa).
@@ -397,11 +449,13 @@ agente_pesquisa/
 
 **Roadmap**
 
-- [ ] BLAST para busca por similaridade de sequência
+- [x] BLAST para busca por similaridade de sequência
+- [x] Interações proteína-proteína (STRING)
 - [ ] Cache local de artigos lidos (artigo publicado não muda)
 - [ ] Ferramenta de fármacos e pequenas moléculas (PubChem / ChEBI)
 - [ ] Interface própria (ex.: Streamlit + API do Claude), com busca garantida antes da resposta
-- [ ] Suporte a macOS/Linux
+- [x] Ferramentas web em macOS/Linux (`uvx`)
+- [ ] Busca em PDFs em macOS/Linux
 - [ ] Busca híbrida (vetorial + palavra-chave) e *reranking*
 
 ---

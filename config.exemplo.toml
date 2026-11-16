@@ -53,3 +53,8 @@ auditoria_salvar_texto = false
 ativo = true
 idiomas = ["pt", "en"]
 dpi = 200
+
+[contato]
+# Exigido pelo BLAST do EBI (buscar_similares). A variável de ambiente
+# AGENTE_PESQUISA_EMAIL tem prioridade sobre este valor.
+email = ""

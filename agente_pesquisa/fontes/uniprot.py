@@ -194,7 +194,7 @@ async def buscar_por_peptideo(
         raise ErroEsperado(
             f"Nenhuma proteína do UniProt contém exatamente a sequência {sequencia}. "
             "O Peptide Search só encontra correspondências exatas. Para sequências "
-            "parecidas (não idênticas), seria preciso BLAST (ainda não implementado)."
+            "parecidas (não idênticas), use buscar_similares (BLAST)."
         )
 
     if organismo:

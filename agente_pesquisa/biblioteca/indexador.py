@@ -20,14 +20,14 @@ from qdrant_client import models
 
 from agente_pesquisa.biblioteca import qdrant
 from agente_pesquisa.biblioteca.embeddings import criar_embeddings
-from agente_pesquisa.config import PASTA_PROJETO, carregar_config
+from agente_pesquisa.config import PASTA_DADOS, carregar_config
 
 log = logging.getLogger("agente-pesquisa")
 
 # Página com menos texto que isso é tratada como escaneada (vai para o OCR).
 MIN_CARACTERES_PAGINA = 20
 
-ARQUIVO_ACEITE = PASTA_PROJETO / ".aviso_aceito"
+ARQUIVO_ACEITE = PASTA_DADOS / ".aviso_aceito"
 
 TITULO_AVISO = "Agente de Pesquisa: aviso de privacidade"
 
@@ -206,6 +206,9 @@ def main() -> None:
         logging.getLogger(barulhento).setLevel(logging.WARNING)
 
     config = carregar_config(args.config)
+    if "qdrant" not in config:
+        sys.exit("ERRO: config.toml não encontrado. A busca em PDFs exige a instalação "
+                 "completa (instalar.bat), que cria o config.toml a partir do config.exemplo.toml.")
     colecao = config["qdrant"]["colecao"]
 
     try:
