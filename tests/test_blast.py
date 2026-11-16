@@ -95,3 +95,14 @@ async def test_timeout_devolve_link(email, monkeypatch):
     respx.get(f"{blast.EBI_BLAST}/status/job-3").respond(200, text="RUNNING")
     with pytest.raises(ErroEsperado, match="jobId=job-3"):
         await blast.buscar_similares(SEQ)
+
+
+@respx.mock
+async def test_erro_400_mostra_motivo_legivel(email):
+    # Resposta real do EBI quando o envio é bloqueado (capturada em 2026-11-16).
+    xml = ("<?xml version='1.0' encoding='UTF-8'?>\n<error>\n <description>You have been "
+           "temporarily blocked from submitting new sequence analysis jobs.</description>\n</error>")
+    respx.post(f"{blast.EBI_BLAST}/run").respond(400, text=xml)
+    with pytest.raises(ErroEsperado) as e:
+        await blast.buscar_similares(SEQ)
+    assert "temporarily blocked" in str(e.value) and "<error>" not in str(e.value)

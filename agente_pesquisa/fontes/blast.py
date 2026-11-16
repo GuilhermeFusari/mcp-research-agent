@@ -59,6 +59,12 @@ def _validar(sequencia: str) -> str:
     return seq
 
 
+def _motivo(resposta: str) -> str:
+    """O EBI responde erros em XML: <error><description>...</description></error>."""
+    m = re.search(r"<description>(.*?)</description>", resposta, re.S)
+    return " ".join((m.group(1) if m else resposta).split())[:400]
+
+
 def _melhor_hsp(hit: dict) -> dict:
     hsps = hit.get("hit_hsps") or [{}]
     return min(hsps, key=lambda h: _num(h.get("hsp_expect"), 1e9))
@@ -141,7 +147,7 @@ async def buscar_similares(
                 },
             )
             if r.status_code == 400:
-                raise ErroEsperado(f"O EBI recusou o pedido de BLAST: {r.text.strip()[:300]}")
+                raise ErroEsperado(f"O EBI recusou o pedido de BLAST: {_motivo(r.text)}")
             r.raise_for_status()
             job = r.text.strip()
             if not re.fullmatch(r"[\w.-]+", job):

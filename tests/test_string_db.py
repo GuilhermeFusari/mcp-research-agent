@@ -81,3 +81,26 @@ def test_organismo_desconhecido():
 async def test_lista_vazia():
     with pytest.raises(ErroEsperado, match="ao menos uma"):
         await string_db.buscar_interacoes(["  "])
+
+
+# Respostas reais do STRING (capturadas em 2026-11-16), para garantir que o
+# formato que o código espera é o que a API devolve.
+IDS_REAIS = [
+    {"queryIndex": 0, "queryItem": "GRB2", "stringId": "9606.ENSP00000376345", "ncbiTaxonId": 9606,
+     "taxonName": "Homo sapiens", "preferredName": "GRB2", "annotation": "Growth factor receptor-bound protein 2"},
+    {"queryIndex": 1, "queryItem": "SOS1", "stringId": "9606.ENSP00000384675", "ncbiTaxonId": 9606,
+     "taxonName": "Homo sapiens", "preferredName": "SOS1", "annotation": "Son of sevenless homolog 1"},
+]
+REDE_REAL = [{"stringId_A": "9606.ENSP00000376345", "stringId_B": "9606.ENSP00000384675",
+              "preferredName_A": "GRB2", "preferredName_B": "SOS1", "ncbiTaxonId": "9606", "score": 0.999,
+              "nscore": 0, "fscore": 0, "pscore": 0, "ascore": 0.068, "escore": 0.999, "dscore": 0.9,
+              "tscore": 0.948}]
+
+
+@respx.mock
+async def test_formato_real_da_rede():
+    respx.post(f"{API}/get_string_ids").respond(200, json=IDS_REAIS)
+    respx.post(f"{API}/network").respond(200, json=REDE_REAL)
+    r = await string_db.buscar_interacoes(["GRB2", "SOS1", "NAOEXISTE"])
+    assert "GRB2 — SOS1 | score 0.999 | evidência: experimentos 1.00, mineração de texto 0.95, bancos curados 0.90" in r.texto
+    assert "Homo sapiens" in r.texto and "NAOEXISTE" in r.texto
