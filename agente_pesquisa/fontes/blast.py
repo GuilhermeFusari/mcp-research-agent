@@ -33,6 +33,11 @@ LIMITE = LimiteDeTaxa(0.5)
 INTERVALO_STATUS_S = 5
 ESPERA_MAX_S = 240
 
+# O EBI só aceita estes valores (conferido em /parameterdetails, 2026-11-16).
+VALORES_ALINHAMENTOS = (5, 10, 20, 50, 100)
+VALORES_EVALUE = ("1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-4", "1e-3",
+                  "1e-2", "1e-1", "1.0", "10", "100", "1000")
+
 MIN_TAM = 10
 MAX_TAM = 10_000
 # Na sequência de entrada aceitamos também X (desconhecido), B, Z, U e O.
@@ -57,6 +62,16 @@ def _validar(sequencia: str) -> str:
     if len(seq) > MAX_TAM:
         raise ErroEsperado(f"Sequência longa demais ({len(seq)} aa; máximo {MAX_TAM}).")
     return seq
+
+
+def _alinhamentos_ebi(max_resultados: int) -> str:
+    """Menor valor aceito pelo EBI que cobre o pedido (o excedente é cortado depois)."""
+    return str(next((v for v in VALORES_ALINHAMENTOS if v >= max_resultados), VALORES_ALINHAMENTOS[-1]))
+
+
+def _evalue_ebi(evalue_max: float) -> str:
+    """Menor corte aceito pelo EBI que não seja mais rigoroso que o pedido."""
+    return next((v for v in VALORES_EVALUE if float(v) >= evalue_max), VALORES_EVALUE[-1])
 
 
 def _motivo(resposta: str) -> str:
@@ -142,8 +157,9 @@ async def buscar_similares(
                 data={
                     "email": email, "program": "blastp", "stype": "protein",
                     "sequence": seq, "database": BANCOS[banco],
-                    "exp": str(evalue_max),
-                    "alignments": str(max_resultados), "scores": str(max_resultados),
+                    "exp": _evalue_ebi(evalue_max),
+                    "alignments": _alinhamentos_ebi(max_resultados),
+                    "scores": _alinhamentos_ebi(max_resultados),
                 },
             )
             if r.status_code == 400:

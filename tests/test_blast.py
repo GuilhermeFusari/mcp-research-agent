@@ -106,3 +106,52 @@ async def test_erro_400_mostra_motivo_legivel(email):
     with pytest.raises(ErroEsperado) as e:
         await blast.buscar_similares(SEQ)
     assert "temporarily blocked" in str(e.value) and "<error>" not in str(e.value)
+
+
+@pytest.mark.parametrize("pedido, enviado", [(1, "5"), (5, "5"), (7, "10"), (50, "50"), (999, "100")])
+def test_alinhamentos_so_valores_aceitos_pelo_ebi(pedido, enviado):
+    assert blast._alinhamentos_ebi(pedido) == enviado
+
+
+@pytest.mark.parametrize("pedido, enviado", [(1e-3, "1e-3"), (0.001, "1e-3"), (5e-4, "1e-3"), (1e-6, "1e-5"), (5000, "1000")])
+def test_evalue_so_valores_aceitos_pelo_ebi(pedido, enviado):
+    assert blast._evalue_ebi(pedido) == enviado
+
+
+# Resposta real do EBI (job de 2026-11-16, SH3 N-terminal do GRB2 contra Swiss-Prot),
+# reduzida aos campos que o código lê. O 2º HSP é o alinhamento com o SH3 C-terminal.
+HIT_REAL = {
+    "hit_num": 4, "hit_id": "GRB2_HUMAN", "hit_acc": "P62993",
+    "hit_desc": "Growth factor receptor-bound protein 2 OS=Homo sapiens OX=9606 GN=GRB2 PE=1 SV=1",
+    "hit_uni_de": "Growth factor receptor-bound protein 2", "hit_uni_os": "Homo sapiens",
+    "hit_uni_ox": "9606", "hit_uni_gn": "GRB2", "hit_len": 217,
+    "hit_hsps": [
+        {"hsp_num": 1, "hsp_score": 314, "hsp_bit_score": 125.6, "hsp_expect": 3.7e-37,
+         "hsp_align_len": 58, "hsp_identity": 100, "hsp_positive": 100, "hsp_gaps": 0,
+         "hsp_query_from": 1, "hsp_query_to": 58, "hsp_hit_from": 1, "hsp_hit_to": 58},
+        {"hsp_num": 2, "hsp_bit_score": 48.1, "hsp_expect": 2.1e-7, "hsp_align_len": 49,
+         "hsp_identity": 40.8, "hsp_query_from": 5, "hsp_query_to": 53},
+    ],
+}
+
+
+@respx.mock
+async def test_formato_real_do_ebi(email):
+    run = respx.post(f"{blast.EBI_BLAST}/run").respond(200, text="ncbiblast-R20261116-113902-0826-70936311-p1m")
+    respx.get(url__regex=rf"{blast.EBI_BLAST}/status/.*").mock(side_effect=[
+        # O EBI às vezes devolve um erro interno transitório no status: o polling deve seguir.
+        httpx.Response(200, text="<?xml version='1.0'?><error><description>SLURM API returned HTTP 429</description></error>"),
+        httpx.Response(200, text="QUEUED"),
+        httpx.Response(200, text="FINISHED"),
+    ])
+    respx.get(url__regex=rf"{blast.EBI_BLAST}/result/.*/json").respond(
+        200, json={"program": "blastp", "query_len": 58, "hits": [HIT_REAL]})
+
+    r = await blast.buscar_similares(SEQ, max_resultados=3)
+
+    form = run.calls[0].request.content.decode()
+    assert "alignments=5" in form and "scores=5" in form and "exp=1e-3" in form
+    assert ("Growth factor receptor-bound protein 2 — P62993\n"
+            "   Gene: GRB2 | Organismo: Homo sapiens | Tamanho: 217 aa\n"
+            "   Identidade 100.0% em 58 aa (consulta 1-58, cobre 100% da consulta) | "
+            "e-value 3.7e-37 | bit score 125.6") in r.texto
