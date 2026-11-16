@@ -1,7 +1,9 @@
 name: testes
 
 on:
+  # Só um disparo por mudança: push na main ou PR (antes rodava duas vezes por PR).
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -9,8 +11,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
         python: ["3.11", "3.13"]
+        # macOS só numa versão: os runners de Mac do GitHub vivem com fila cheia.
+        include:
+          - os: macos-latest
+            python: "3.13"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
